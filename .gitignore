@@ -1,0 +1,18 @@
+# Build outputs
+mac/usbc-display
+windows/bin/
+windows/obj/
+windows/app/
+tools/*/bin/
+tools/*/obj/
+tools/*/app/
+
+# Logs and test results
+*.log
+tools/tests/results/
+
+# Machine-specific
+tools/tests/ssh_config
+.DS_Store
+.vs/
+*.user

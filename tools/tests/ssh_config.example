@@ -1,0 +1,22 @@
+# Copy to ssh_config (next to this file; it isn't committed) and fill in your Mac's details.
+# The test scripts reach the Mac as "macwifi": over Wi-Fi, so a test that freezes the cable link
+# can still talk to it, and copies don't send large bundled packets over the cable.
+# Needs Remote Login on the Mac (System Settings > General > Sharing) and an SSH key.
+
+Host macwifi
+  HostName 192.168.1.20   # the Mac's Wi-Fi address
+  User your-mac-user
+  IdentityFile C:\Users\you\.ssh\usbc_display_mac
+  IdentitiesOnly yes
+  BatchMode yes
+  ConnectTimeout 8
+  StrictHostKeyChecking accept-new
+
+# Over the cable itself (IPv6 link-local: the Mac's address, then %% and Windows' interface index).
+Host mac
+  HostName fe80::1234:5678:9abc:def0%%48
+  User your-mac-user
+  IdentityFile C:\Users\you\.ssh\usbc_display_mac
+  IdentitiesOnly yes
+  BatchMode yes
+  ConnectTimeout 8
