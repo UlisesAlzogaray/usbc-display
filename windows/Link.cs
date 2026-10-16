@@ -31,6 +31,17 @@ static class Proto
     public const uint Profile = 0x50444355;  // "UCDP": 16-byte header (magic, length) + ICC bytes
     public const uint AckWantKeyframe = 0xFFFFFFFF;
 
+    // Setup status probe (windows/setup/CONTRACT.md): Query {actions, wizard version lo, hi} from
+    // here, Info {status bits, version, macOS, refuse reason} from the Mac.
+    public const uint Query = 0x51444355, Info = 0x49444355;                        // "UCDQ" "UCDI"
+    public const uint QueryScreen = 1, QueryAccessibility = 2, QueryLoginItems = 4,
+                      QueryRelaunch = 8, QueryMoveToApplications = 16;
+    public const uint StatusScreenOk = 1, StatusAxOk = 2, StatusScreenPrompted = 4, StatusAxPrompted = 8,
+                      StatusLoginItemEnabled = 16, StatusLoginItemNeedsApproval = 32, StatusSessionActive = 64,
+                      StatusRunningAsAgent = 128, StatusInApplications = 256, StatusScreenNeedsRelaunch = 512;
+    public const uint RefuseNone = 0, RefuseNoScreenRecording = 1;
+    public const ushort HelloStatus = 1024;  // answer a refused Hello with Info instead of closing
+
     // ptW x ptH: the size the Mac's display should look like, in points (0 = from the scale).
     public static byte[] MakeHello(ScreenInfo s, ushort flags, int ptW, int ptH)
     {

@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en" data-has-app="{{HAS_APP}}" data-notarized="{{NOTARIZED}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>USB-C Display</title>
+<link rel="icon" href="/icon.png">
+<link rel="apple-touch-icon" href="/icon.png">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f5f5f7;
+    --card: #ffffff;
+    --text: #1d1d1f;
+    --muted: #6e6e73;
+    --line: rgba(0, 0, 0, 0.08);
+    --blue: #0071e3;
+    --blue-hover: #0077ed;
+    --soft: #f0f6ff;
+    --green: #1d9a4e;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 12px 40px rgba(0, 0, 0, 0.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #000000;
+      --card: #1c1c1e;
+      --text: #f5f5f7;
+      --muted: #a1a1a6;
+      --line: rgba(255, 255, 255, 0.1);
+      --blue: #0a84ff;
+      --blue-hover: #409cff;
+      --soft: rgba(10, 132, 255, 0.12);
+      --green: #32d74b;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 40px rgba(0, 0, 0, 0.5);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body {
+    font: 17px/1.47 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 16px;
+  }
+  main {
+    width: 100%;
+    max-width: 560px;
+    background: var(--card);
+    border-radius: 22px;
+    box-shadow: var(--shadow);
+    padding: 44px 44px 36px;
+    text-align: center;
+  }
+  .icon { width: 112px; height: 112px; display: block; margin: 0 auto 18px; }
+  h1 { font-size: 32px; line-height: 1.15; letter-spacing: -0.02em; margin: 0 0 10px; font-weight: 700; }
+  .lead { color: var(--muted); margin: 0 auto 28px; max-width: 420px; }
+
+  .path {
+    display: flex; align-items: center; justify-content: center; gap: 12px;
+    margin: 0 auto 30px; color: var(--muted); font-size: 13px;
+  }
+  .path figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .path svg { display: block; }
+  .wire { position: relative; width: 110px; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; margin-bottom: 20px; }
+  .wire::after {
+    content: ""; position: absolute; top: 0; left: -30%; width: 30%; height: 100%;
+    border-radius: 2px; background: var(--blue);
+    animation: flow 1.6s ease-in-out infinite;
+  }
+  @keyframes flow { to { left: 100%; } }
+
+  .download {
+    display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+    min-width: 300px; padding: 16px 30px;
+    font: inherit; font-size: 19px; font-weight: 600; color: #fff; text-decoration: none;
+    background: var(--blue); border-radius: 980px; border: 0; cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+  }
+  .download:hover { background: var(--blue-hover); }
+  .download:active { transform: scale(0.98); }
+  .download:focus-visible { outline: 3px solid var(--soft); outline-offset: 3px; }
+  .meta { color: var(--muted); font-size: 14px; margin: 12px 0 0; }
+
+  .next { display: none; text-align: left; margin: 30px 0 0; padding: 22px 24px; border-radius: 16px; background: var(--soft); }
+  .next.show { display: block; animation: rise 0.35s ease-out; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+  .next h2 { font-size: 19px; margin: 0 0 10px; }
+  .next ol { margin: 0; padding-left: 22px; }
+  .next li { margin: 6px 0; }
+  .next .laptop { font-weight: 600; }
+
+  .missing { display: none; color: var(--muted); }
+  html[data-has-app="false"] .missing { display: block; }
+  html[data-has-app="false"] .offer { display: none; }
+  .not-notarized { display: none; }
+  html[data-notarized="false"] .not-notarized { display: list-item; }
+  html[data-notarized="false"] .notarized { display: none; }
+
+  .about { border-top: 1px solid var(--line); margin-top: 30px; padding-top: 18px; color: var(--muted); font-size: 13px; }
+  .about p { margin: 0; }
+  @media (max-width: 520px) {
+    main { padding: 32px 22px 28px; }
+    .download { min-width: 0; width: 100%; }
+    .wire { width: 60px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .wire::after { animation: none; left: 35%; }
+    .next.show { animation: none; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <img class="icon" src="/icon.png" alt="">
+  <h1>USB-C Display</h1>
+  <p class="lead">Use your laptop as a second screen for this Mac.</p>
+
+  <div class="path" aria-hidden="true">
+    <figure>
+      <svg width="64" height="44" viewBox="0 0 64 44"><rect x="8" y="3" width="48" height="31" rx="3" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M2 38h60l-3 4H5z" fill="currentColor"/></svg>
+      <figcaption>Your laptop</figcaption>
+    </figure>
+    <div class="wire"></div>
+    <figure>
+      <svg width="64" height="44" viewBox="0 0 64 44"><rect x="8" y="3" width="48" height="31" rx="3" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M2 38h60l-3 4H5z" fill="currentColor"/><circle cx="32" cy="6" r="1" fill="currentColor"/></svg>
+      <figcaption>This Mac</figcaption>
+    </figure>
+  </div>
+
+  <div class="offer">
+    <a class="download" id="download" href="/USB-C-Display.zip" download="USB-C-Display.zip">
+      <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2v11m0 0l-4.5-4.5M10 13l4.5-4.5M3 17h14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Download USB-C Display
+    </a>
+    <p class="meta">For Mac &middot; {{SIZE}}<br>This file comes from your laptop, through the cable. Not from the internet.</p>
+
+    <section class="next" id="next" aria-live="polite">
+      <h2>While it downloads</h2>
+      <ol>
+        <li>If Safari asks whether to allow downloads, click <b>Allow</b>.</li>
+        <li class="notarized">Open <b>USB-C Display</b> from your Downloads. When your Mac asks if you're sure, click <b>Open</b>.</li>
+        <li class="not-notarized">Open <b>USB-C Display</b> from your Downloads. If your Mac says it can't check the app, click <b>Done</b>, not Move to Trash. Your laptop shows you how to open it.</li>
+        <li class="laptop">Then come back to your laptop. It shows you every next step.</li>
+      </ol>
+    </section>
+  </div>
+
+  <p class="missing">This copy of USB-C Display Setup doesn't include the Mac app. Get a complete copy of the setup on your laptop, then come back to this page.</p>
+
+  <div class="about">
+    <p>Safari may say "Not Secure" in the address bar. That's expected: this page comes straight from your laptop over the cable and never touches the internet.</p>
+  </div>
+</main>
+<script>
+  document.getElementById('download').addEventListener('click', function () {
+    var next = document.getElementById('next');
+    next.classList.add('show');
+    this.lastChild.textContent = ' Download again';
+  });
+</script>
+</body>
+</html>

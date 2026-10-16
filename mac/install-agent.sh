@@ -1,6 +1,7 @@
 #!/bin/bash
 # Runs the Mac side at every login, in the background. It sits idle until the Windows
-# laptop asks for the screen, so you never have to start it by hand.
+# laptop asks for the screen, so you never have to start it by hand. (This is the developer's
+# way; people install dist/USB-C Display.app, which sets up the same agent by itself. Use one.)
 #   bash install-agent.sh            install (or reinstall after rebuilding) and start it
 #   bash install-agent.sh --remove   stop it and stop starting it at login
 set -e
@@ -24,7 +25,7 @@ cat > "$PLIST" <<EOF
 <plist version="1.0">
 <dict>
     <key>Label</key><string>$LABEL</string>
-    <key>ProgramArguments</key><array><string>$PWD/usbc-display</string></array>
+    <key>ProgramArguments</key><array><string>$PWD/usbc-display</string><string>--agent</string></array>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>LimitLoadToSessionType</key><string>Aqua</string>

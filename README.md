@@ -133,6 +133,14 @@ Enter, ⌘←, ⌥→ and scrolling all arrive as intended.
 Switching size makes the Mac replace the display, so windows that were on it move back
 to the Mac's screen.
 
+- **Mac, the app:** `mac/build.sh` also makes `mac/dist/USB-C Display.app` (and
+  `USB-C-Display.zip`, which the laptop's setup serves to the Mac over the cable). Opened from
+  Applications, it registers itself to run at login (*Login Items*), asks for nothing until
+  the laptop's setup or screen needs it, and logs to `~/Library/Logs/USB-C Display.log`. Use
+  either the app or `install-agent.sh` below, not both: they are the same login agent, and
+  each needs its own permissions. A newer zip opened outside Applications offers to update
+  the copy there. Build with `DEVELOPER_ID` and `NOTARY_PROFILE` (see `build.sh`) for other
+  people: macOS blocks an app that isn't notarized until someone clicks *Open Anyway*.
 - **Mac:** `bash mac/install-agent.sh` runs the sender at every login as a background
   agent. It stays idle until the laptop asks for the screen. The first time, allow
   `usbc-display` under *System Settings > Privacy & Security > Screen Recording*. It
@@ -196,6 +204,20 @@ each; `windows/Input.cs`). **Frames**: Join with the token,
 then frames (32-byte header with the capture time, then rects: raw, LZ4, or H.264 plus the
 16×16 regions to take from it) and acks the moment a frame is in the receiver's picture, at
 most two frames in flight. Details in `mac/usbc-display.m` and `windows/Link.cs`.
+
+**Setup status** (first-run setup, `windows/setup/CONTRACT.md` section 1): a third kind of
+connection, also cable only. The setup app sends Query (16 bytes: the actions to take, and its
+version); the Mac answers with Status (32 bytes: the permission and login-item bits, its app
+and protocol version, the macOS version, a refuse reason) and keeps the connection open,
+sending Status again within a second whenever a bit changes. Further Queries run more actions:
+ask for Screen Recording or Accessibility (the first ask shows macOS's prompt, later ones open
+the page in System Settings), open Login Items, restart the Mac side so a new grant takes
+effect, or move the app to Applications (restart and move wait while a screen is showing).
+The setup app asks every 5 s; the Mac drops a connection that is quiet for 15 s, and the
+oldest when a fifth one opens. None of it needs Screen Recording or a running screen. A Hello with flag 1024
+gets a Status with refuse reason 1 instead of a silent close when Screen Recording is missing.
+Mac builds from before this close the connection, which the setup app reads as "update the
+Mac app".
 
 ## Building
 

@@ -6,6 +6,10 @@
 // it starts at login with no runtime setup. C# 5, because that's what that compiler takes.
 //
 // usage: UsbcWatcher [--install | --uninstall]   (start at login, via HKCU\...\Run)
+//        UsbcWatcher --started-by-setup           (a cable that's already in isn't a new plug)
+//
+// Until setup has finished (SetupDone), plugging in opens USB-C Display Setup instead of the
+// popup: it guides both machines through the first connection.
 
 using System;
 using System.Collections.Generic;
@@ -25,6 +29,7 @@ static class Watcher
     const string RunName = "USB-C Display";
     const string SettingsKey = @"Software\USB-C Display";  // remembers the screen size you picked
     static readonly string AppDir = AppDomain.CurrentDomain.BaseDirectory;
+    const string SetupExe = "USB-C Display Setup.exe";
     static readonly string LogPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"UsbcDisplay\receiver.log");
 
@@ -67,6 +72,8 @@ static class Watcher
             menu.Items.Add("Quit", null, delegate { Application.Exit(); });
             tray = new NotifyIcon { Icon = MakeIcon(), Text = "USB-C Display", ContextMenuStrip = menu, Visible = true };
 
+            if (args.Length > 0 && args[0] == "--started-by-setup") linkUp = CableUp();
+
             var timer = new System.Windows.Forms.Timer { Interval = 1000 };
             timer.Tick += delegate { Check(); };
             timer.Start();
@@ -88,7 +95,17 @@ static class Watcher
         return false;
     }
 
-    static bool ReceiverRunning { get { return receiver != null && !receiver.HasExited; } }
+    // Ours, or one the setup app started.
+    static bool ReceiverRunning
+    {
+        get
+        {
+            if (receiver != null && !receiver.HasExited) return true;
+            var others = Process.GetProcessesByName("UsbcDisplay");
+            foreach (var p in others) p.Dispose();
+            return others.Length > 0;
+        }
+    }
 
     static void Check()
     {
@@ -96,7 +113,7 @@ static class Watcher
         {
             downChecks = 0;
             // A link that comes back while the receiver runs is its own recovery, not a new plug.
-            if (!linkUp && !ReceiverRunning && prompt == null) ShowPrompt();
+            if (!linkUp && !ReceiverRunning && prompt == null && !OpenSetup()) ShowPrompt();
             linkUp = true;
             if (!ReceiverRunning) WatchForWedge();
         }
@@ -231,6 +248,24 @@ static class Watcher
         }
     }
 
+    // Before setup has finished, a plug-in opens the setup app (or brings it forward).
+    static bool OpenSetup()
+    {
+        using (var k = Registry.CurrentUser.OpenSubKey(SettingsKey))
+        {
+            object v = k == null ? null : k.GetValue("SetupDone");
+            if (v is int && (int)v != 0) return false;
+        }
+        string setup = Path.Combine(AppDir, SetupExe);
+        if (!File.Exists(setup)) return false;
+        try
+        {
+            using (Process.Start(new ProcessStartInfo(setup) { UseShellExecute = false, WorkingDirectory = AppDir })) { }
+            return true;
+        }
+        catch { return false; }
+    }
+
     static void ShowPrompt()
     {
         prompt = new ChoiceForm(SavedScale(), SystemScale(), Screen.PrimaryScreen.Bounds.Size, SavedColorManaged(), SavedFlag("Input"));
@@ -270,8 +305,10 @@ static class Watcher
             RedirectStandardError = true,
             WorkingDirectory = AppDir,
         };
-        // UsbcDisplay is a .NET 8 app using the SDK in the home folder, not a system-wide runtime.
-        psi.EnvironmentVariables["DOTNET_ROOT"] = Environment.ExpandEnvironmentVariables(@"%USERPROFILE%\.dotnet-sdk");
+        // A framework-dependent UsbcDisplay (a development build) uses the SDK in the home folder;
+        // the installed one is self-contained and needs nothing.
+        if (FrameworkDependent(psi.FileName))
+            psi.EnvironmentVariables["DOTNET_ROOT"] = Environment.ExpandEnvironmentVariables(@"%USERPROFILE%\.dotnet-sdk");
 
         showing = warned = false;
         receiverStarted = DateTime.UtcNow;
@@ -298,6 +335,16 @@ static class Watcher
             receiver = null;
             MessageBox.Show("Could not start the screen receiver:\n" + e.Message, "USB-C Display", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    static bool FrameworkDependent(string exe)
+    {
+        try
+        {
+            string config = Path.ChangeExtension(exe, ".runtimeconfig.json");
+            return File.Exists(config) && File.ReadAllText(config).Contains("\"framework");
+        }
+        catch { return false; }
     }
 
     // A small blue monitor, readable on light and dark taskbars.

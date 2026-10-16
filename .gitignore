@@ -3,6 +3,11 @@ mac/usbc-display
 windows/bin/
 windows/obj/
 windows/app/
+windows/setup/bin/
+windows/setup/obj/
+windows/setup/build/
+windows/setup/payload/
+windows/setup/dist/
 tools/*/bin/
 tools/*/obj/
 tools/*/app/

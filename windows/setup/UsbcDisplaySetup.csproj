@@ -1,0 +1,67 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- "USB-C Display Setup.exe": the one download for Windows. Build with tools/build-windows.sh,
+       which first puts the receiver, the watcher and the Mac app into payload/. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.22621.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>USB-C Display Setup</AssemblyName>
+    <RootNamespace>UsbcSetup</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <DebugType>embedded</DebugType>
+    <Product>USB-C Display</Product>
+    <Company>USB-C Display</Company>
+    <Description>USB-C Display Setup</Description>
+
+    <!-- win-arm64 by default; -p:SetupRid=win-x64 for Intel and AMD laptops. -->
+    <SetupRid Condition="'$(SetupRid)' == ''">win-arm64</SetupRid>
+    <RuntimeIdentifier>$(SetupRid)</RuntimeIdentifier>
+    <PlatformTarget Condition="'$(SetupRid)' == 'win-arm64'">ARM64</PlatformTarget>
+    <PlatformTarget Condition="'$(SetupRid)' == 'win-x64'">x64</PlatformTarget>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+
+    <!-- Sent to the Mac in the status probe, and shown on the download page. -->
+    <SetupBuild Condition="'$(SetupBuild)' == ''">1</SetupBuild>
+    <AppNotarized Condition="'$(AppNotarized)' == ''">false</AppNotarized>
+
+    <!-- The DPI mode comes from app.manifest (per-monitor v2). -->
+    <NoWarn>$(NoWarn);WFAC010;CA1416</NoWarn>
+    <!-- The WebView2 package always references its WPF assembly, which wants WindowsBase. -->
+    <MSBuildWarningsAsMessages>$(MSBuildWarningsAsMessages);MSB3277</MSBuildWarningsAsMessages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3537.50" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="SetupBuild" Value="$(SetupBuild)" />
+    <AssemblyMetadata Include="AppNotarized" Value="$(AppNotarized)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Shared with the receiver: the wire protocol and finding the Mac on the cable. -->
+    <Compile Include="../Link.cs" Link="Shared/Link.cs" />
+    <Compile Remove="bin/**;obj/**;dist/**;payload/**;build/**;ui/**;web/**" />
+    <None Remove="bin/**;obj/**;dist/**;payload/**;build/**;ui/**;web/**" />
+
+    <!-- The wizard screens (built separately; whatever is there gets embedded). -->
+    <EmbeddedResource Include="ui/**/*" Exclude="ui/**/.*" LogicalName="ui/%(RecursiveDir)%(Filename)%(Extension)" />
+    <!-- The page the Mac's Safari opens. -->
+    <EmbeddedResource Include="web/**/*" Exclude="web/**/.*" LogicalName="web/%(RecursiveDir)%(Filename)%(Extension)" />
+    <!-- UsbcDisplay.exe, UsbcWatcher.exe, USB-C-Display.zip: each only if it was built. -->
+    <EmbeddedResource Include="payload/*" LogicalName="payload/%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>

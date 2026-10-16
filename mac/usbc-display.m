@@ -11,8 +11,8 @@
 // spans two frames; tested at 800+ MB/s over 100 GB with no stall. The pointer, heartbeats
 // and clock sync travel on their own connection so they never wait behind pictures.
 //
-// Build: ./build.sh
-// Run:   ./usbc-display [--native] [--mirror] [--h264] [--no-lz4] [--port N] [--bench [FPS]]
+// Build: ./build.sh (also makes dist/USB-C Display.app, the one people install)
+// Run:   ./usbc-display [--native] [--mirror] [--h264] [--no-lz4] [--port N] [--bench [FPS]] [--agent]
 
 #import <AppKit/AppKit.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
@@ -25,19 +25,26 @@
 #import <Accelerate/Accelerate.h>
 #import <ColorSync/ColorSync.h>
 #import <ApplicationServices/ApplicationServices.h>
+#import <ServiceManagement/ServiceManagement.h>
 #include <compression.h>
+#include <crt_externs.h>
 #include <dlfcn.h>
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <ifaddrs.h>
 #include <mach/mach_time.h>
+#include <mach-o/dyld.h>
 #include <net/if.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <pthread.h>
 #include <pthread/qos.h>
 #include <poll.h>
+#include <spawn.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
+#include <sys/xattr.h>
 
 // ---- Private CoreGraphics API (macOS 11+) that virtual-display apps are built on ----
 @interface CGVirtualDisplayDescriptor : NSObject
@@ -92,7 +99,8 @@ enum { HELLO_CAN_H264 = 1, HELLO_TEST_CARD = 2,
        HELLO_LOSSLESS_ONLY = 64,
        HELLO_TEST_DRAG = 128,    // with TEST_CARD: the card is a window dragged around for 8 s
        HELLO_PROFILE = 256,      // the laptop panel's ICC profile follows the Hello
-       HELLO_INPUT = 512 };      // the laptop's trackpad and keyboard drive the Mac
+       HELLO_INPUT = 512,        // the laptop's trackpad and keyboard drive the Mac
+       HELLO_STATUS = 1024 };    // answer a refusal with a STATUS message instead of just closing
 #define MAGIC_PROFILE 0x50444355u // "UCDP": WinMsg {magic, length} + ICC bytes
 // Input from the laptop (WinMsg). MOVE {x | y << 16}; BUTTON {button, down, x | y << 16};
 // SCROLL {dy, dx (Windows wheel units), x | y << 16}; KEY {mac key code, down | repeat << 1,
@@ -110,6 +118,17 @@ enum { HELLO_CAN_H264 = 1, HELLO_TEST_CARD = 2,
 #define MAGIC_IN_REL    0x72444355u // "UCDr"
 #define MAGIC_LAYOUT    0x4C444355u // "UCDL" to the laptop: where other displays touch this one
 #define AT_POINTER 0xFFFFFFFFu
+// First-run setup (windows/setup/CONTRACT.md): the setup app opens a connection whose first
+// message is QUERY (WinMsg {actions, wizard version lo, hi}); the Mac answers with STATUS and
+// sends it again whenever a bit changes. More QUERYs on the same connection run more actions.
+#define MAGIC_QUERY  0x51444355u // "UCDQ"
+#define MAGIC_STATUS 0x49444355u // "UCDI"
+#define APP_VERSION 1            // the app's build number; build.sh copies it into Info.plist
+enum { ST_SCREEN_OK = 1, ST_AX_OK = 2, ST_SCREEN_PROMPTED = 4, ST_AX_PROMPTED = 8,
+       ST_LOGIN_ITEM_ENABLED = 16, ST_LOGIN_ITEM_NEEDS_APPROVAL = 32, ST_SESSION_ACTIVE = 64,
+       ST_RUNNING_AS_AGENT = 128, ST_IN_APPLICATIONS = 256, ST_SCREEN_NEEDS_RELAUNCH = 512 };
+enum { ACT_SCREEN = 1, ACT_ACCESSIBILITY = 2, ACT_LOGIN_ITEMS = 4, ACT_RELAUNCH = 8, ACT_MOVE = 16 };
+enum { REFUSE_NONE = 0, REFUSE_NO_SCREEN_RECORDING = 1 };
 enum { FRAME_HAS_H264 = 1 };     // FrameHeader.flags
 
 #pragma pack(push, 1)
@@ -120,15 +139,21 @@ typedef struct { uint32_t magic, a, b, c; } WinMsg;  // ACK {seq, receiverMicros
 typedef struct { uint32_t magic, a; uint64_t b, c; uint8_t pad[8]; } CtlMsg;  // WELCOME {token}, BEAT {seq, macNs}, TIME {seq, winNs, macNs}, BYE {reason}
 typedef struct { uint32_t magic; int16_t x, y; uint16_t visible, reserved; uint64_t pollNs; uint8_t pad[12]; } MouseMsg;
 typedef struct { uint32_t magic; uint16_t w, h, hotX, hotY; uint32_t dataBytes; uint8_t pad[16]; } ShapeMsg;
+// STATUS: version = APP_VERSION << 16 | PROTOCOL_VERSION; macOS = major << 32 | minor << 16 | patch.
+typedef struct { uint32_t magic, status; uint64_t version, macOS; uint32_t refuse, zero; } StatusMsg;
 #pragma pack(pop)
 _Static_assert(sizeof(Hello) == 24 && sizeof(FrameHeader) == 32 && sizeof(WinMsg) == 16, "wire sizes");
 _Static_assert(sizeof(CtlMsg) == 32 && sizeof(MouseMsg) == 32 && sizeof(ShapeMsg) == 32, "control messages are 32 bytes");
+_Static_assert(sizeof(StatusMsg) == 32, "control messages are 32 bytes");
 
 static int gPort = 48100, gMaxInflight = 2;
 static BOOL gMirror, gNative, gBench, gNoLZ4, gH264, gBilinear;
 static int gBitrateMbps = 40;  // H.264 target for motion (only when the link can't keep up)
 static int gMaxQP = 24;        // H.264 quality floor for motion (lower = sharper, more data)
 static int gMaxBenchHz;        // --bench N: frames per second (0 = the receiver's refresh rate)
+static BOOL gAgent;            // the login agent (--agent), not a copy started from Finder or a terminal
+static BOOL gInBundle;         // runs from USB-C Display.app rather than as the bare program
+static BOOL gScreenPrompted;   // asked macOS for Screen Recording during this run
 
 // ---- State shared by the capture callback, sender and reader threads ----
 static pthread_mutex_t gLock = PTHREAD_MUTEX_INITIALIZER;
@@ -983,6 +1008,14 @@ static CGPoint gLastClickPos;
 static int gTrusted = -1;          // last state told to the receiver
 static BOOL gTrustPrompted;
 
+// Tells the receiver when input becomes allowed or not.
+static void noteTrust(BOOL ok) {
+    if (ok == gTrusted) return;
+    gTrusted = ok;
+    CtlMsg s = { MAGIC_INPUT_STATE, (uint32_t)ok, 0, 0, {0} };
+    dispatch_async(gCtlQueue, ^{ ctlSend(&s, sizeof s); });
+}
+
 static BOOL inputAllowed(void) {
     uint64_t t = nowNs();
     if (gTrusted == 1 && t - gTrustCheckNs < 2 * NSEC_PER_SEC) return YES;
@@ -994,11 +1027,7 @@ static BOOL inputAllowed(void) {
         AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)o);
         printf("The laptop's trackpad and keyboard need usbc-display allowed under Privacy & Security > Accessibility.\n");
     }
-    if (ok != gTrusted) {
-        gTrusted = ok;
-        CtlMsg s = { MAGIC_INPUT_STATE, (uint32_t)ok, 0, 0, {0} };
-        dispatch_async(gCtlQueue, ^{ ctlSend(&s, sizeof s); });
-    }
+    noteTrust(ok);
     return ok;
 }
 
@@ -1537,6 +1566,516 @@ static void logStats(double secs) {
     gStatDeliverNs = gStatFitNs = gStatToSendNs = gStatToSendN = gStatGpuNs = 0;
 }
 
+// ---- First-run setup: status for the laptop's setup app, and the actions it asks for ----
+// windows/setup/CONTRACT.md section 1. Nothing here needs Screen Recording or a session.
+#define AGENT_LABEL @"com.usbc-display.sender"
+#define AGENT_PLIST @"com.usbc-display.sender.plist"  // in the app: Contents/Library/LaunchAgents
+#define APP_IN_APPLICATIONS @"/Applications/USB-C Display.app"
+static pthread_mutex_t gStatusLock = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t gFreshCheckNs;
+static int gFreshScreen = -1;     // what a new process of this program gets: 1 allowed, 0 not, -1 unknown
+static BOOL gBusy;                // moving or relaunching: later actions wait for the new process
+static void sayGoodbye(uint32_t reason);
+
+static BOOL sendAll(int fd, const void *buf, size_t n) {
+    const uint8_t *p = buf;
+    while (n) {
+        ssize_t k = send(fd, p, n, 0);
+        if (k < 0 && errno == EINTR) continue;
+        if (k <= 0) return NO;
+        p += k; n -= (size_t)k;
+    }
+    return YES;
+}
+
+// Children get stdin, stdout and stderr only. An inherited socket would keep port 48100 (or a
+// receiver's connection) open after this process quits.
+static pid_t spawn(const char *const argv[], BOOL detached) {
+    posix_spawnattr_t a;
+    posix_spawnattr_init(&a);
+    // Detached: outlives this one (launchd stops a job's whole process group with it).
+    posix_spawnattr_setflags(&a, POSIX_SPAWN_CLOEXEC_DEFAULT | (detached ? POSIX_SPAWN_SETSID : 0));
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    for (int fd = 0; fd <= 2; fd++) posix_spawn_file_actions_addinherit_np(&fa, fd);
+    pid_t pid = -1;
+    if (posix_spawn(&pid, argv[0], &fa, &a, (char *const *)argv, *_NSGetEnviron()) != 0) pid = -1;
+    posix_spawn_file_actions_destroy(&fa);
+    posix_spawnattr_destroy(&a);
+    return pid;
+}
+
+static pid_t spawnDetached(const char *const argv[]) { return spawn(argv, YES); }
+
+static int runTool(const char *const argv[]) {  // waits; the exit code, or -1
+    pid_t pid = spawn(argv, NO);
+    if (pid < 0) return -1;
+    int st;
+    while (waitpid(pid, &st, 0) < 0) if (errno != EINTR) return -1;
+    return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+}
+
+static void setCloexec(int fd) { fcntl(fd, F_SETFD, FD_CLOEXEC); }
+
+// macOS applies a new Screen Recording grant only to processes started after it, so this
+// process can't see a grant made since it started. A new process of this program can: it
+// runs "--screen-check" and exits 0 when allowed. Checked only once Screen Recording was asked
+// for (the setup is on that step, or a screen wanted it), every 2 s for a minute, then every
+// 5 s. One check at a time, never under gStatusLock; others get the last answer.
+static pthread_mutex_t gFreshLock = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t gScreenAskedNs;
+static int screenAllowedForNewProcess(BOOL now) {
+    if (!now && !gScreenAskedNs) return -1;
+    if (pthread_mutex_trylock(&gFreshLock) != 0) return gFreshScreen;
+    uint64_t t = nowNs(), every = gScreenAskedNs && t - gScreenAskedNs < 60 * NSEC_PER_SEC ? 2 : 5;
+    if (now || !gFreshCheckNs || t - gFreshCheckNs > every * NSEC_PER_SEC) {
+        char path[PATH_MAX];
+        uint32_t n = sizeof path;
+        const char *argv[] = { path, "--screen-check", NULL };
+        pid_t pid;
+        int fresh = -1;
+        if (_NSGetExecutablePath(path, &n) == 0 && (pid = spawn(argv, NO)) > 0) {
+            int st = 0, i = 0;
+            pid_t r;
+            while ((r = waitpid(pid, &st, WNOHANG)) == 0 && i++ < 300) usleep(10000);
+            if (r == 0) { kill(pid, SIGKILL); waitpid(pid, NULL, 0); }
+            else if (r == pid && WIFEXITED(st) && WEXITSTATUS(st) <= 1) fresh = WEXITSTATUS(st) == 0;
+        }
+        gFreshScreen = fresh;
+        gFreshCheckNs = nowNs();
+    }
+    int r = gFreshScreen;
+    pthread_mutex_unlock(&gFreshLock);
+    return r;
+}
+
+static BOOL inApplications(void) {
+    return gInBundle && [NSBundle.mainBundle.bundlePath hasPrefix:@"/Applications/"];
+}
+
+static NSString *legacyAgentPlist(void) {  // install-agent.sh, and the app's own on macOS 12
+#ifdef USBC_TEST_LOOPBACK
+    if (getenv("USBC_TEST_HOME"))  // test builds: lets a test flip LOGIN_ITEM_ENABLED
+        return [NSString stringWithFormat:@"%s/Library/LaunchAgents/%@.plist", getenv("USBC_TEST_HOME"), AGENT_LABEL];
+#endif
+    return [NSHomeDirectory() stringByAppendingFormat:@"/Library/LaunchAgents/%@.plist", AGENT_LABEL];
+}
+
+static uint32_t loginItemBits(void) {
+    if (@available(macOS 13.0, *)) {
+        if (gInBundle) {
+            SMAppServiceStatus s = [SMAppService agentServiceWithPlistName:AGENT_PLIST].status;
+            if (s == SMAppServiceStatusEnabled) return ST_LOGIN_ITEM_ENABLED;
+            if (s == SMAppServiceStatusRequiresApproval) return ST_LOGIN_ITEM_NEEDS_APPROVAL;
+        }
+    }
+    return [NSFileManager.defaultManager fileExistsAtPath:legacyAgentPlist()] ? ST_LOGIN_ITEM_ENABLED : 0;
+}
+
+static uint32_t currentStatus(void) {
+    BOOL screen = gBench || CGPreflightScreenCaptureAccess();
+    return (screen ? ST_SCREEN_OK : 0) | (AXIsProcessTrusted() ? ST_AX_OK : 0) |
+           (gScreenPrompted ? ST_SCREEN_PROMPTED : 0) | (gTrustPrompted ? ST_AX_PROMPTED : 0) |
+           loginItemBits() | (gConnected ? ST_SESSION_ACTIVE : 0) | (gAgent ? ST_RUNNING_AS_AGENT : 0) |
+           (inApplications() ? ST_IN_APPLICATIONS : 0) |
+           (!screen && screenAllowedForNewProcess(NO) == 1 ? ST_SCREEN_NEEDS_RELAUNCH : 0);
+}
+
+static BOOL sendStatus(int fd, uint32_t status, uint32_t refuse) {
+    NSOperatingSystemVersion v = NSProcessInfo.processInfo.operatingSystemVersion;
+    StatusMsg m = { MAGIC_STATUS, status, (uint64_t)APP_VERSION << 16 | PROTOCOL_VERSION,
+                    (uint64_t)v.majorVersion << 32 | (uint64_t)v.minorVersion << 16 | (uint64_t)v.patchVersion, refuse, 0 };
+    return sendAll(fd, &m, sizeof m);
+}
+
+static void openSettings(NSString *url) {
+    [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:url]];
+}
+
+// Asks for Screen Recording (macOS shows its prompt only the first time ever).
+static void requestScreenRecording(void) {
+    gScreenPrompted = YES;
+    gScreenAskedNs = nowNs();
+    [NSUserDefaults.standardUserDefaults setBool:YES forKey:@"ScreenPromptShown"];
+    dispatch_async(dispatch_get_main_queue(), ^{ CGRequestScreenCaptureAccess(); });
+}
+
+// Where the app really is when macOS runs it from a read-only copy (App Translocation, for a
+// downloaded app opened where it was saved).
+static NSString *originalBundlePath(void) {
+    NSString *here = NSBundle.mainBundle.bundlePath;
+    void *sec = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_LAZY);
+    Boolean (*isTranslocated)(CFURLRef, bool *, CFErrorRef *) = sec ? (Boolean (*)(CFURLRef, bool *, CFErrorRef *))dlsym(sec, "SecTranslocateIsTranslocatedURL") : NULL;
+    CFURLRef (*original)(CFURLRef, CFErrorRef *) = sec ? (CFURLRef (*)(CFURLRef, CFErrorRef *))dlsym(sec, "SecTranslocateCreateOriginalPathForURL") : NULL;
+    bool translocated = false;
+    NSURL *url = [NSURL fileURLWithPath:here];
+    if (isTranslocated && original && isTranslocated((__bridge CFURLRef)url, &translocated, NULL) && translocated) {
+        NSURL *o = CFBridgingRelease(original((__bridge CFURLRef)url, NULL));
+        if (o.path) return o.path;
+    }
+    return here;
+}
+
+// Starts the app at path once this process has gone, and quits.
+static BOOL openAndQuit(NSString *path) {
+    const char *argv[] = { "/bin/sh", "-c", "sleep 1; exec /usr/bin/open -n \"$0\"", path.fileSystemRepresentation, NULL };
+    sayGoodbye(2);
+    if (spawnDetached(argv) <= 0) return NO;
+    exit(0);
+}
+
+// Quits so a new Screen Recording grant takes effect, and comes back.
+static void relaunch(void) {
+    if (gAgent) {
+        printf("Restarting so the new permission takes effect.\n");
+        sayGoodbye(2);
+        exit(0);  // launchd starts the agent again (KeepAlive)
+    }
+    if (gInBundle) {
+        printf("Restarting so the new permission takes effect.\n");
+        openAndQuit(originalBundlePath());
+        gBusy = NO;
+        return;
+    }
+    printf("Started from a terminal: quit and run it again (the permission belongs to the terminal app).\n");
+    gBusy = NO;
+}
+
+static NSString *appleScriptString(NSString *s) {
+    s = [s stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+    return [s stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
+}
+
+static NSString *shellQuoted(NSString *s) {
+    return [NSString stringWithFormat:@"'%@'", [s stringByReplacingOccurrencesOfString:@"'" withString:@"'\\''"]];
+}
+
+// Runs a shell command as root once macOS has asked for an administrator's password.
+static BOOL runAsAdmin(NSString *cmd) {
+    NSString *src = [NSString stringWithFormat:@"do shell script \"%@\" with administrator privileges", appleScriptString(cmd)];
+    __block BOOL done = NO;
+    void (^run)(void) = ^{
+        [NSApp activateIgnoringOtherApps:YES];
+        NSDictionary *e = nil;
+        done = [[[NSAppleScript alloc] initWithSource:src] executeAndReturnError:&e] != nil;
+        if (!done) printf("Not done as administrator: %s\n", [e[NSAppleScriptErrorMessage] description].UTF8String);
+    };
+    if (NSThread.isMainThread) run();
+    else dispatch_sync(dispatch_get_main_queue(), run);
+    return done;
+}
+
+// The download flag makes macOS run the app from a read-only copy wherever it is.
+static BOOL quarantined(NSString *path) {
+    return getxattr(path.fileSystemRepresentation, "com.apple.quarantine", NULL, 0, 0, XATTR_NOFOLLOW) >= 0;
+}
+
+static NSString *ownTo(NSString *path) {  // shell: give the copy to this account, so updates need no password
+    return [NSString stringWithFormat:@"/usr/sbin/chown -R %u:%u %@", getuid(), getgid(), shellQuoted(path)];
+}
+
+static BOOL clearQuarantine(NSString *path) {
+    const char *xattr[] = { "/usr/bin/xattr", "-dr", "com.apple.quarantine", path.fileSystemRepresentation, NULL };
+    if (runTool(xattr) == 0 && !quarantined(path)) return YES;
+    printf("Could not clear the download flag on %s; asking for an administrator.\n", path.UTF8String);
+    return runAsAdmin([NSString stringWithFormat:@"/usr/bin/xattr -dr com.apple.quarantine %@ && %@", shellQuoted(path), ownTo(path)]) &&
+           !quarantined(path);
+}
+
+// Copies the app to /Applications (asking for an administrator's password if this account
+// can't write there), then starts it from there and quits.
+static void moveToApplications(void) {
+    if (!gInBundle || inApplications()) {
+        printf(gInBundle ? "Already in Applications.\n" : "Only USB-C Display.app can move itself to Applications.\n");
+        gBusy = NO;
+        return;
+    }
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *here = NSBundle.mainBundle.bundlePath, *from = originalBundlePath(), *dest = APP_IN_APPLICATIONS;
+    NSString *there = [NSBundle bundleWithPath:dest].infoDictionary[@"CFBundleVersion"];
+    if ([from hasPrefix:@"/Applications/"]) {
+        dest = from;  // in Applications already, but run from a read-only copy because of the download flag
+        printf("USB-C Display is in Applications but still flagged as downloaded.\n");
+    } else if (there.integerValue >= APP_VERSION) {
+        printf("USB-C Display is already in Applications; using that copy.\n");
+    } else {
+        NSError *err = nil;
+        BOOL ok = (![fm fileExistsAtPath:dest] || [fm trashItemAtURL:[NSURL fileURLWithPath:dest] resultingItemURL:nil error:&err]) &&
+                  [fm copyItemAtPath:here toPath:dest error:&err];
+        if (!ok) {
+            printf("Could not copy to Applications (%s); asking for an administrator.\n", err.localizedDescription.UTF8String);
+            // ditto runs as root here: --noqtn leaves the download flag behind, and the copy is
+            // handed to this account.
+            ok = runAsAdmin([NSString stringWithFormat:@"/bin/rm -rf %@ && /usr/bin/ditto --noqtn %@ %@ && /usr/bin/xattr -dr com.apple.quarantine %@ && %@",
+                             shellQuoted(dest), shellQuoted(here), shellQuoted(dest), shellQuoted(dest), ownTo(dest)]);
+        }
+        if (!ok) { gBusy = NO; return; }
+        if (![from hasPrefix:@"/Applications/"] && [fm fileExistsAtPath:from])
+            [fm trashItemAtURL:[NSURL fileURLWithPath:from] resultingItemURL:nil error:nil];
+        printf("Copied to %s.\n", dest.UTF8String);
+    }
+    // Copied by a program, not by Finder: without this macOS would run it from a read-only
+    // copy again, and the setup would ask to move it forever.
+    if (!clearQuarantine(dest)) {
+        printf("%s is still flagged as downloaded; not starting it from there.\n", dest.UTF8String);
+        gBusy = NO;
+        return;
+    }
+    openAndQuit(dest);  // an agent registered from the old place is replaced by the new copy
+    gBusy = NO;
+}
+
+static void runActions(uint32_t actions) {
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    // macOS shows each prompt once ever, and the prompt has its own button to System Settings:
+    // the first ask shows the prompt alone, later asks open the page.
+    if (actions & ACT_SCREEN) {
+        gScreenAskedNs = nowNs();
+        if (!CGPreflightScreenCaptureAccess() && ![d boolForKey:@"ScreenPromptShown"]) {
+            printf("Setup: asking for Screen Recording.\n");
+            requestScreenRecording();
+        } else {
+            printf("Setup: opening Screen Recording in System Settings.\n");
+            gScreenPrompted = YES;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                openSettings(@"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture");
+            });
+        }
+    }
+    if (actions & ACT_ACCESSIBILITY) {
+        BOOL prompt = !AXIsProcessTrusted() && ![d boolForKey:@"AXPromptShown"];
+        printf(prompt ? "Setup: asking for Accessibility.\n" : "Setup: opening Accessibility in System Settings.\n");
+        gTrustPrompted = YES;
+        [d setBool:YES forKey:@"AXPromptShown"];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (prompt) {
+                NSDictionary *o = @{ (__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES };
+                AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)o);
+            } else {
+                openSettings(@"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
+            }
+        });
+    }
+    if (actions & ACT_LOGIN_ITEMS) {
+        printf("Setup: opening Login Items.\n");
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (@available(macOS 13.0, *)) [SMAppService openSystemSettingsLoginItems];
+            else [NSWorkspace.sharedWorkspace openURL:[NSURL fileURLWithPath:@"/System/Library/PreferencePanes/Accounts.prefPane"]];
+        });
+    }
+    // Never cut a picture that's showing, and restart only when that can help.
+    if ((actions & (ACT_RELAUNCH | ACT_MOVE)) && gConnected) {
+        printf("Setup: not restarting or moving while the screen is showing.\n");
+        return;
+    }
+    if ((actions & ACT_RELAUNCH) && !(actions & ACT_MOVE) && (gBench || CGPreflightScreenCaptureAccess())) {
+        printf("Setup: no restart needed, Screen Recording works already.\n");
+        return;
+    }
+    if (!(actions & (ACT_RELAUNCH | ACT_MOVE))) return;
+    pthread_mutex_lock(&gStatusLock);
+    BOOL busy = gBusy;
+    gBusy = YES;
+    pthread_mutex_unlock(&gStatusLock);
+    if (busy) return;
+    // After the answer to this QUERY has gone out.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 200 * NSEC_PER_MSEC), dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        if (actions & ACT_MOVE) {
+            printf("Setup: moving the app to Applications.\n");
+            moveToApplications();
+        } else {
+            relaunch();
+        }
+    });
+}
+
+typedef struct { int fd; WinMsg q; int slot; uint64_t gen; } ProbeArgs;
+// Open setup connections. A full table drops the oldest: an unplugged cable leaves no trace.
+static struct { int fd; uint64_t gen; } gProbeSlots[4];
+static uint64_t gProbeGen;
+
+// One setup app connection: STATUS now, again whenever a bit changes, and actions on request.
+static void *probeMain(void *arg) {
+    ProbeArgs *pa = arg;
+    int fd = pa->fd, slot = pa->slot;
+    WinMsg q = pa->q;
+    uint64_t gen = pa->gen;
+    free(pa);
+    int one = 1, idle = 5, intvl = 2, cnt = 3;
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+    setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof one);
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, &idle, sizeof idle);
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof intvl);
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof cnt);
+    struct timeval wait = { 3, 0 };  // a QUERY that starts arriving finishes quickly
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &wait, sizeof wait);
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &wait, sizeof wait);
+    printf("Setup app connected (its version %llu).\n", (unsigned long long)(q.b | (uint64_t)q.c << 32));
+    uint32_t last = 0;
+    uint64_t lastQuery = nowNs();
+    for (BOOL query = YES;;) {
+        if (query && q.a) runActions(q.a);
+        uint32_t st = currentStatus();
+        if (query || st != last) {
+            if (!sendStatus(fd, st, REFUSE_NONE)) break;
+            last = st;
+        }
+        // The setup app asks every 5 s; silence means it, or the cable, is gone.
+        if (nowNs() - lastQuery > 15 * NSEC_PER_SEC) {
+            printf("Setup app went quiet.\n");
+            break;
+        }
+        struct pollfd p = { fd, POLLIN, 0 };
+        int r = poll(&p, 1, 1000);
+        if (r < 0 && errno != EINTR) break;
+        query = r > 0;
+        if (query && (!recvAll(fd, &q, sizeof q) || q.magic != MAGIC_QUERY)) break;
+        if (query) lastQuery = nowNs();
+    }
+    pthread_mutex_lock(&gStatusLock);
+    if (gProbeSlots[slot].gen == gen) gProbeSlots[slot].gen = 0;
+    pthread_mutex_unlock(&gStatusLock);
+    close(fd);
+    printf("Setup app disconnected.\n");
+    return NULL;
+}
+
+static void startProbe(int fd, WinMsg q) {
+    ProbeArgs *pa = malloc(sizeof *pa);
+    pa->fd = fd;
+    pa->q = q;
+    pthread_mutex_lock(&gStatusLock);
+    int slot = 0;
+    for (int i = 0; i < 4; i++) {
+        if (!gProbeSlots[i].gen) { slot = i; break; }
+        if (gProbeSlots[i].gen < gProbeSlots[slot].gen) slot = i;
+    }
+    if (gProbeSlots[slot].gen) {  // its thread closes it
+        printf("Too many setup connections; dropping the oldest.\n");
+        shutdown(gProbeSlots[slot].fd, SHUT_RDWR);
+    }
+    gProbeSlots[slot].fd = fd;
+    gProbeSlots[slot].gen = pa->gen = ++gProbeGen;
+    pa->slot = slot;
+    pthread_mutex_unlock(&gStatusLock);
+    pthread_t t;
+    if (pthread_create(&t, NULL, probeMain, pa) != 0) {
+        pthread_mutex_lock(&gStatusLock);
+        if (gProbeSlots[slot].gen == pa->gen) gProbeSlots[slot].gen = 0;
+        pthread_mutex_unlock(&gStatusLock);
+        close(fd);
+        free(pa);
+        return;
+    }
+    pthread_detach(t);
+}
+
+// The version the login agent was last set up with.
+static NSString *agentVersionFile(void) {
+    return [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/USB-C Display/agent-version"];
+}
+static BOOL agentVersionMatches(void) {
+    return [NSString stringWithContentsOfFile:agentVersionFile() encoding:NSUTF8StringEncoding error:nil].intValue == APP_VERSION;
+}
+static void noteAgentVersion(void) {
+    NSString *f = agentVersionFile();
+    [NSFileManager.defaultManager createDirectoryAtPath:f.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:nil];
+    [[NSString stringWithFormat:@"%d", APP_VERSION] writeToFile:f atomically:YES encoding:NSUTF8StringEncoding error:nil];
+}
+
+// Started from Finder, or by macOS after "Quit & Reopen": makes sure the login agent is set up
+// to run this copy of the app. YES when the agent takes care of everything and this copy can
+// quit; NO when this copy should answer the setup app itself meanwhile.
+static BOOL setUpLoginAgent(void) {
+    NSString *bundle = NSBundle.mainBundle.bundlePath;
+    if (!inApplications()) {
+        printf("Running from %s, not from Applications: the laptop's setup will move it.\n", bundle.UTF8String);
+        return NO;
+    }
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *legacy = legacyAgentPlist();
+    NSArray *legacyArgs = [NSDictionary dictionaryWithContentsOfFile:legacy][@"ProgramArguments"];
+    if (legacyArgs && ![legacyArgs.firstObject containsString:@".app/"]) {
+        printf("The bare program runs as the login agent already (install-agent.sh); run\n"
+               "\"bash mac/install-agent.sh --remove\" first to use the app instead.\n");
+        return NO;
+    }
+    if (@available(macOS 13.0, *)) {
+        if (legacyArgs) {  // written by this app on macOS 12, before an upgrade
+            const char *bootout[] = { "/bin/launchctl", "bootout", [NSString stringWithFormat:@"gui/%u/%@", getuid(), AGENT_LABEL].UTF8String, NULL };
+            runTool(bootout);
+            [fm removeItemAtPath:legacy error:nil];
+        }
+        SMAppService *agent = [SMAppService agentServiceWithPlistName:AGENT_PLIST];
+        NSString *dir = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/USB-C Display"];
+        NSString *mark = [dir stringByAppendingPathComponent:@"agent-app-path"];
+        BOOL same = [[NSString stringWithContentsOfFile:mark encoding:NSUTF8StringEncoding error:nil] isEqualToString:bundle];
+        SMAppServiceStatus s = agent.status;
+        // An update put a new version here: the running agent is the old one, maybe from the Trash.
+        BOOL current = agentVersionMatches();
+        if (same && current && s == SMAppServiceStatusEnabled) return YES;
+        if (same && !current) printf("Updated to version %d; restarting the login agent.\n", APP_VERSION);
+        if (same && s == SMAppServiceStatusRequiresApproval) {
+            printf("The login agent is switched off in System Settings > General > Login Items.\n");
+            return NO;
+        }
+        if (s != SMAppServiceStatusNotRegistered && s != SMAppServiceStatusNotFound)
+            [agent unregisterAndReturnError:nil];  // registered from another copy of the app
+        NSError *err = nil;
+        BOOL ok = [agent registerAndReturnError:&err];
+        [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+        [bundle writeToFile:mark atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        noteAgentVersion();
+        s = agent.status;
+        printf("Login agent %s%s%s.\n", s == SMAppServiceStatusEnabled ? "registered" :
+               s == SMAppServiceStatusRequiresApproval ? "registered, but switched off in Login Items" : "not registered",
+               ok ? "" : ": ", ok ? "" : err.localizedDescription.UTF8String);
+        return s == SMAppServiceStatusEnabled;
+    }
+    // macOS 12: a LaunchAgent plist of our own.
+    NSString *exe = NSBundle.mainBundle.executablePath;
+    if ([legacyArgs.firstObject isEqualToString:exe] && agentVersionMatches()) return YES;
+    NSDictionary *plist = @{ @"Label": AGENT_LABEL, @"ProgramArguments": @[ exe, @"--agent" ],
+                             @"RunAtLoad": @YES, @"KeepAlive": @YES, @"LimitLoadToSessionType": @"Aqua",
+                             @"ProcessType": @"Interactive", @"AssociatedBundleIdentifiers": @[ AGENT_LABEL ] };
+    [fm createDirectoryAtPath:legacy.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *domain = [NSString stringWithFormat:@"gui/%u", getuid()];
+    const char *bootout[] = { "/bin/launchctl", "bootout", [domain stringByAppendingFormat:@"/%@", AGENT_LABEL].UTF8String, NULL };
+    runTool(bootout);
+    if (![plist writeToFile:legacy atomically:YES]) return NO;
+    const char *bootstrap[] = { "/bin/launchctl", "bootstrap", domain.UTF8String, legacy.fileSystemRepresentation, NULL };
+    BOOL ok = runTool(bootstrap) == 0;
+    if (ok) noteAgentVersion();
+    printf("Login agent %s.\n", ok ? "installed" : "could not be started");
+    return ok;
+}
+
+// The bundled app logs to ~/Library/Logs/USB-C Display.log (the agent's plist can't name a
+// path in your home folder). Past 20 MB it becomes .log.old; checked at start and hourly.
+static void logToLibrary(BOOL start) {
+    NSString *log = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Logs/USB-C Display.log"];
+    if (start)
+        [NSFileManager.defaultManager createDirectoryAtPath:log.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:nil];
+    NSDictionary *a = [NSFileManager.defaultManager attributesOfItemAtPath:log error:nil];
+    BOOL big = a.fileSize > (20u << 20);
+    if (big) rename(log.fileSystemRepresentation, [log stringByAppendingString:@".old"].fileSystemRepresentation);
+    if (!start && !big) return;
+    freopen(log.fileSystemRepresentation, "a", stdout);
+    freopen(log.fileSystemRepresentation, "a", stderr);
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    setCloexec(fileno(stdout));
+    setCloexec(fileno(stderr));
+}
+
+#ifdef USBC_TEST_LOOPBACK
+// Test builds only (build.sh never defines it): with USBC_ALLOW_LOOPBACK=1 a local script may
+// use the status probe. Nothing else is allowed from loopback.
+static BOOL testLoopback(const struct sockaddr_storage *peer) {
+    return getenv("USBC_ALLOW_LOOPBACK") && peer->ss_family == AF_INET6 &&
+           IN6_IS_ADDR_LOOPBACK(&((const struct sockaddr_in6 *)peer)->sin6_addr);
+}
+#endif
+
 static void *sessionMain(void *arg) {
     SessionArgs *sa = arg;
     int ctl = sa->ctl;
@@ -1559,11 +2098,14 @@ static void *sessionMain(void *arg) {
 
     if (!gBench && !CGPreflightScreenCaptureAccess()) {
         // Without it the new display would only be a black hole for your windows.
+        int fresh = gAgent || gInBundle ? screenAllowedForNewProcess(YES) : 0;
+        if (fresh != 1 && !gScreenPrompted) requestScreenRecording();
         printf("Not allowed to record the screen yet: allow %s in System Settings >\n"
-               "Privacy & Security > Screen Recording.\n", getppid() == 1 ? "usbc-display" : "your terminal app");
+               "Privacy & Security > Screen Recording.\n", gAgent || gInBundle ? "USB-C Display" : "your terminal app");
+        if (h.flags & HELLO_STATUS) sendStatus(ctl, currentStatus(), REFUSE_NO_SCREEN_RECORDING);
         // A permission granted since this process started only applies to a new one, and
         // launchd starts the agent again right away; the receiver keeps retrying meanwhile.
-        if (getppid() == 1) exit(0);
+        if (gAgent && fresh != 0) exit(0);
         close(ctl);
         if (sa->profile) CFRelease(sa->profile);
         free(sa);
@@ -1720,6 +2262,8 @@ static void *sessionMain(void *arg) {
             CtlMsg b = { MAGIC_BEAT, ++beat, nowNs(), 0, {0} };
             ctlSend(&b, sizeof b);
             if (gInputMode && beat % 10 == 1) sendLayout(beat == 1);  // displays may be rearranged any time
+            // A grant in System Settings shows up within a second, without waiting for input.
+            if (gInputMode && beat % 10 == 6) noteTrust(AXIsProcessTrusted());
         });
         dispatch_resume(gBeatTimer);
         if (gBench) {
@@ -1841,34 +2385,70 @@ static BOOL peerOnCable(const struct sockaddr_storage *peer, char *ifname) {
 }
 
 static void serveForever(void) {
-    int ls = socket(AF_INET6, SOCK_STREAM, 0), one = 1;
-    setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-    setsockopt(ls, IPPROTO_IPV6, IPV6_V6ONLY, &one, sizeof one);  // no IPv4: it can't be tied to the cable
-    struct sockaddr_in6 addr = { .sin6_len = sizeof addr, .sin6_family = AF_INET6,
-                                 .sin6_port = htons(gPort), .sin6_addr = in6addr_any };
-    if (bind(ls, (struct sockaddr *)&addr, sizeof addr) != 0 || listen(ls, 4) != 0) {
-        fprintf(stderr, "Cannot listen on port %d: %s\n", gPort, strerror(errno));
+    int ls, one = 1;
+    for (BOOL told = NO;; told = YES) {
+        ls = socket(AF_INET6, SOCK_STREAM, 0);
+        setCloexec(ls);  // children (open, sh, the screen check) must not keep the port
+        setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+        setsockopt(ls, IPPROTO_IPV6, IPV6_V6ONLY, &one, sizeof one);  // no IPv4: it can't be tied to the cable
+        struct sockaddr_in6 addr = { .sin6_len = sizeof addr, .sin6_family = AF_INET6,
+                                     .sin6_port = htons(gPort), .sin6_addr = in6addr_any };
+        if (bind(ls, (struct sockaddr *)&addr, sizeof addr) == 0 && listen(ls, 4) == 0) break;
+        int e = errno;
+        close(ls);
+        // The agent waits for a copy started from Finder to hand the port over; that copy, or
+        // one started while the agent runs, leaves the port to the agent.
+        if (gAgent && e == EADDRINUSE) {
+            if (!told) printf("Port %d is busy; waiting for it.\n", gPort);
+            sleep(2);
+            continue;
+        }
+        if (gInBundle && e == EADDRINUSE) {
+            printf("Another copy is answering already; quitting.\n");
+            exit(0);
+        }
+        fprintf(stderr, "Cannot listen on port %d: %s\n", gPort, strerror(e));
         exit(1);
     }
     printf("Waiting for the Windows receiver on port %d...\n", gPort);
+    uint64_t lastAgentCheck = nowNs(), lastLogCheck = nowNs();
     for (;;) {
         struct sockaddr_storage peer;
         socklen_t plen = sizeof peer;
         int s = -1;
         while (s < 0) {
             struct pollfd p = { ls, POLLIN, 0 };
-            if (poll(&p, 1, 1000) > 0) s = accept(ls, (struct sockaddr *)&peer, &plen);
+            if (poll(&p, 1, 1000) > 0 && (s = accept(ls, (struct sockaddr *)&peer, &plen)) >= 0) setCloexec(s);
+            if (s < 0 && gInBundle && nowNs() - lastLogCheck > 3600 * NSEC_PER_SEC) {
+                lastLogCheck = nowNs();
+                logToLibrary(NO);
+            }
             pthread_mutex_lock(&gSessLock);
             BOOL idle = !gSessionActive;
             pthread_mutex_unlock(&gSessLock);
             if (idle && gDisplayExpires && nowNs() > gDisplayExpires) removeDisplay();
+            // A copy of the app answering while the login agent couldn't: once the agent is
+            // switched on, it takes over.
+            if (s < 0 && idle && gInBundle && !gAgent && inApplications() && nowNs() - lastAgentCheck > 2 * NSEC_PER_SEC) {
+                lastAgentCheck = nowNs();
+                if (loginItemBits() & ST_LOGIN_ITEM_ENABLED) {
+                    printf("The login agent is on now; leaving the port to it.\n");
+                    exit(0);
+                }
+            }
         }
         char name[INET6_ADDRSTRLEN] = "?", ifname[IF_NAMESIZE];
         if (peer.ss_family == AF_INET6) inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&peer)->sin6_addr, name, sizeof name);
+        BOOL loopbackProbe = NO;
         if (!peerOnCable(&peer, ifname)) {
-            printf("Refused a connection from %s%%%s: not on the USB-C cable.\n", name, ifname);
-            close(s);
-            continue;
+#ifdef USBC_TEST_LOOPBACK
+            loopbackProbe = testLoopback(&peer);
+#endif
+            if (!loopbackProbe) {
+                printf("Refused a connection from %s%%%s: not on the USB-C cable.\n", name, ifname);
+                close(s);
+                continue;
+            }
         }
         // A peer that never says what it wants must not hold the accept loop.
         struct timeval wait = { 3, 0 }, forever = { 0, 0 };
@@ -1876,6 +2456,13 @@ static void serveForever(void) {
         uint8_t first[sizeof(Hello)];
         if (!recvAll(s, first, sizeof(WinMsg))) { close(s); continue; }
         uint32_t magic = *(uint32_t *)first;
+        if (magic == MAGIC_QUERY) {  // the setup app, asking how things stand
+            WinMsg q;
+            memcpy(&q, first, sizeof q);
+            startProbe(s, q);
+            continue;
+        }
+        if (loopbackProbe) { close(s); continue; }
         if (magic == MAGIC_JOIN) {
             WinMsg *j = (WinMsg *)first;
             setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &forever, sizeof forever);
@@ -1935,10 +2522,33 @@ static void serveForever(void) {
     }
 }
 
+static void offerUpdate(void) {
+    NSString *from = originalBundlePath();
+    NSString *there = [NSBundle bundleWithPath:APP_IN_APPLICATIONS].infoDictionary[@"CFBundleVersion"];
+    if ([from hasPrefix:@"/Applications/"]) {  // only the download flag is wrong
+        moveToApplications();
+        return;
+    }
+    if (!there || there.integerValue >= APP_VERSION) return;  // a first install: the setup guides the move
+    printf("Version %ld is in Applications; this is version %d.\n", (long)there.integerValue, APP_VERSION);
+    [NSApp activateIgnoringOtherApps:YES];
+    NSAlert *a = [NSAlert new];
+    a.messageText = @"Update USB-C Display?";
+    a.informativeText = @"This is a newer version than the one in your Applications folder. Update it now?";
+    [a addButtonWithTitle:@"Update"];
+    [a addButtonWithTitle:@"Not Now"];
+    if ([a runModal] == NSAlertFirstButtonReturn) moveToApplications();
+}
+
 int main(int argc, const char *argv[]) {
+    // Run by screenAllowedForNewProcess: does a new process get to record the screen?
+    if (argc == 2 && !strcmp(argv[1], "--screen-check")) return CGPreflightScreenCaptureAccess() ? 0 : 1;
     @autoreleasepool {
+        BOOL agentArg = NO;
         for (int i = 1; i < argc; i++) {
-            if (!strcmp(argv[i], "--mirror")) gMirror = YES;
+            if (!strcmp(argv[i], "--agent")) agentArg = YES;
+            else if (!strncmp(argv[i], "-psn_", 5)) { }  // added by older macOS when started from Finder
+            else if (!strcmp(argv[i], "--mirror")) gMirror = YES;
             else if (!strcmp(argv[i], "--native")) gNative = YES;
             else if (!strcmp(argv[i], "--no-lz4")) gNoLZ4 = YES;
             else if (!strcmp(argv[i], "--h264")) gH264 = YES;
@@ -1952,7 +2562,7 @@ int main(int argc, const char *argv[]) {
             else if (!strcmp(argv[i], "--bitrate") && i + 1 < argc) gBitrateMbps = atoi(argv[++i]);
             else if (!strcmp(argv[i], "--max-qp") && i + 1 < argc) gMaxQP = atoi(argv[++i]);
             else {
-                printf("usage: usbc-display [--native] [--mirror] [--h264] [--no-lz4] [--bitrate MBPS] [--max-qp N] [--port N] [--bench [FPS]]\n"
+                printf("usage: usbc-display [--native] [--mirror] [--h264] [--no-lz4] [--bitrate MBPS] [--max-qp N] [--port N] [--bench [FPS]] [--agent]\n"
                        "  --native  1:1 pixels instead of Retina-style scaling (smaller text)\n"
                        "  --mirror  show the Mac's main screen instead of adding a new one\n"
                        "  --h264    send motion as H.264 (as before 2026-10-15) instead of exact pixels\n"
@@ -1960,11 +2570,18 @@ int main(int argc, const char *argv[]) {
                        "  --bilinear  let ScreenCaptureKit fit Retina modes to the laptop (softer) instead of Lanczos\n"
                        "  --bitrate H.264 target in Mbit/s for motion (default 40)\n"
                        "  --max-qp  H.264 quality floor for motion, 0-51, lower is sharper (default 24)\n"
-                       "  --bench [FPS]  send frames where every pixel changes (default: the receiver's refresh rate)\n");
+                       "  --bench [FPS]  send frames where every pixel changes (default: the receiver's refresh rate)\n"
+                       "  --agent   run as the login agent (the LaunchAgent plists pass it)\n");
                 return 0;
             }
         }
         signal(SIGPIPE, SIG_IGN);
+        gInBundle = [NSBundle.mainBundle.bundlePath hasSuffix:@".app"];
+        // Plists written by older install-agent.sh have no --agent: launchd is the parent there.
+        // launchd names the job in XPC_SERVICE_NAME, should --agent ever not arrive.
+        const char *job = getenv("XPC_SERVICE_NAME");
+        gAgent = agentArg || (job && !strcmp(job, AGENT_LABEL.UTF8String)) || (!gInBundle && getppid() == 1);
+        if (gInBundle) logToLibrary(YES);
         setvbuf(stdout, NULL, _IOLBF, 0);  // keep the log file current when piped through tee
         gCtlQueue = dispatch_queue_create("control", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
 
@@ -1972,18 +2589,22 @@ int main(int argc, const char *argv[]) {
         [NSApplication sharedApplication];
         // Accessory: no Dock icon or menu bar, but allowed to show the test card window.
         [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
-        BOOL agent = getppid() == 1;  // started by launchd (install-agent.sh), not from a terminal
+        printf("USB-C Display (Mac side) %d, %s\n", APP_VERSION, gAgent ? "running as a login agent" :
+               gInBundle ? "started from Finder" : "started from a terminal");
+        // A newer download opened outside Applications updates the copy there right away: the
+        // old agent holds the port, so the laptop's setup can't reach this copy to ask.
+        if (gInBundle && !gAgent && !inApplications()) offerUpdate();
+        // The app started from Finder sets up the login agent and leaves the rest to it.
+        if (gInBundle && !gAgent && setUpLoginAgent()) {
+            printf("The login agent runs USB-C Display from now on; this copy quits.\n");
+            return 0;
+        }
+        // Screen Recording is asked for when the laptop's setup or screen asks, not here: at
+        // login there would be no telling what the request is for.
         if (!gBench && !CGPreflightScreenCaptureAccess()) {
-            CGRequestScreenCaptureAccess();
-            if (agent) {
-                printf("macOS needs Screen Recording permission for usbc-display. Allow it in\n"
-                       "System Settings > Privacy & Security > Screen Recording; it takes effect the\n"
-                       "next time the laptop connects.\n");
-            } else {
-                printf("macOS needs Screen Recording permission for this terminal app.\n"
-                       "Allow it in System Settings > Privacy & Security > Screen Recording,\n"
-                       "then quit and reopen the terminal and run this again.\n");
-            }
+            printf("Screen Recording isn't allowed yet. macOS asks for it the first time the laptop\n"
+                   "needs it; allow %s in System Settings > Privacy & Security > Screen Recording.\n",
+                   gAgent || gInBundle ? "USB-C Display" : "this terminal app");
         }
         // Going to sleep or being stopped: the receiver hides its window right away.
         [NSWorkspace.sharedWorkspace.notificationCenter addObserverForName:NSWorkspaceWillSleepNotification
@@ -1993,7 +2614,6 @@ int main(int argc, const char *argv[]) {
         dispatch_source_set_event_handler(term, ^{ sayGoodbye(2); exit(0); });
         dispatch_resume(term);
 
-        printf("USB-C Display (Mac side)%s\n", agent ? ", running as a login agent" : "");
         printLinkAddresses();
         NSThread *server = [[NSThread alloc] initWithBlock:^{ serveForever(); }];
         server.qualityOfService = NSQualityOfServiceUserInteractive;

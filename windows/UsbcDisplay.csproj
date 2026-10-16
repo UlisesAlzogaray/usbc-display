@@ -17,6 +17,10 @@
   <ItemGroup>
     <!-- The watcher is a separate .NET Framework program (build-watcher.cmd). -->
     <Compile Remove="watcher/**" />
+    <!-- So is the setup app (setup/UsbcDisplaySetup.csproj, tools/build-windows.sh). -->
+    <Compile Remove="setup/**" />
+    <None Remove="setup/**" />
+    <EmbeddedResource Remove="setup/**" />
   </ItemGroup>
 
 </Project>
