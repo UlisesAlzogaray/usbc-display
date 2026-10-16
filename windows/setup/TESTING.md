@@ -94,9 +94,9 @@ what you actually saw when it differs (exact dialog text, button names, timings)
 - [ ] The laptop shows `http://usbc.local`. Typing it in Safari on the Mac opens the landing page.
 - [ ] Does Safari resolve usbc.local over the cable at all? (setup.log: `web: GET /`.) If Safari
       treats it as a search, the hint on the laptop covers that.
-- [ ] If usbc.local gets no visit for 30 s, the laptop switches to the `http://169.254.x.x`
-      address, and only once the Mac has an IPv4 address on the cable. Does that address work,
-      or does it go out over Wi-Fi?
+- [x] The `http://169.254.x.x` address doesn't open on a Mac on Wi-Fi (Oct 2026): Safari's request
+      goes out over Wi-Fi. usbc.local did open, so the laptop keeps showing it and offers the
+      address only as a second try after 45 s.
 - [ ] Is port 80 free? (Some laptops have IIS or other http.sys users.) If not, setup.log shows
       the web server failing to bind, and the laptop shows "isn't ready to send the app yet" after 20 s.
 - [ ] Windows Defender Firewall asks nothing extra while the rules are in.

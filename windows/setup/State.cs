@@ -56,7 +56,6 @@ sealed class ServerState
     public bool UrlReady, PageVisited;
     public DownloadState Download = new();
     public bool AppNotarized;
-    public bool UsingFallback;               // extra: Url was switched to FallbackUrl (usbc.local got no visit)
 }
 
 sealed class DownloadState

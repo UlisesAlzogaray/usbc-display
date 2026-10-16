@@ -18,7 +18,7 @@ Mac app.
   `https://setup.usbc-display.example/`.
 - **State.** The app posts the whole state (CONTRACT.md section 2) whenever something changes, at
   most ten times a second. Extra fields beyond the contract: `laptop.missingPayload`,
-  `laptop.installError`, `laptop.installing`, `server.usingFallback`, `screen.error`. Mac
+  `laptop.installError`, `laptop.installing`, `screen.error`. Mac
   `status` keeps its last values while the Mac app is away (relaunching, say); check
   `mac.reachable`. `screen.pointerOnLaptop` is always false: the receiver doesn't report it yet.
 - **Install** copies the app, the screen receiver (`UsbcDisplay.exe`), the tray watcher
@@ -37,8 +37,9 @@ Mac app.
   listens on port 80 on the laptop's cable addresses only, and answers only peers on the
   cable: `/`, `/USB-C-Display.zip` and `/icon.png` (the page is `web/index.html`). A small mDNS
   responder answers `usbc.local` on the cable only. `server.urlReady` turns true once the Mac
-  is on the link. If Safari hasn't asked for anything 30 s later, `server.url` switches to
-  `http://<laptop's 169.254 address>`, but only after the Mac has an IPv4 address too.
+  is on the link. `server.url` stays `http://usbc.local`. The laptop's 169.254 address
+  (`server.fallbackUrl`) is only offered as a second try: a Mac on Wi-Fi sends 169.254.x.x out
+  over Wi-Fi, so in the first test the address didn't open while usbc.local did.
 - **The Mac app.** The app connects to the Mac's port 48100 over the cable and asks for its
   status (CONTRACT.md section 1), again every 2 s if it isn't there. An app that closes the
   connection on the question is an older build: `mac.outdated`.

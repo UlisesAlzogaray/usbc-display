@@ -54,38 +54,70 @@ static class Machine
     // ---- USB4 ----
     [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode)] static extern int CM_Get_Device_ID_List_SizeW(out int len, string filter, int flags);
     [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode)] static extern int CM_Get_Device_ID_ListW(string filter, char[] buffer, int len, int flags);
+    [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode)] static extern int CM_Locate_DevNodeW(out int devInst, string id, int flags);
+    [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode)] static extern int CM_Get_DevNode_Registry_PropertyW(int devInst, int property, out int type, char[] buffer, ref int len, int flags);
     const int CM_GETIDLIST_FILTER_PRESENT = 0x100;
+    const int CM_DRP_SERVICE = 5;
 
-    static List<string> PresentDevices()
+    // All devices Windows knows, or only the ones present now.
+    static List<string> Devices(bool presentOnly)
     {
-        if (CM_Get_Device_ID_List_SizeW(out int len, null, CM_GETIDLIST_FILTER_PRESENT) != 0 || len <= 0) return null;
+        int filter = presentOnly ? CM_GETIDLIST_FILTER_PRESENT : 0;
+        if (CM_Get_Device_ID_List_SizeW(out int len, null, filter) != 0 || len <= 0) return null;
         var buf = new char[len];
-        if (CM_Get_Device_ID_ListW(null, buf, len, CM_GETIDLIST_FILTER_PRESENT) != 0) return null;
+        if (CM_Get_Device_ID_ListW(null, buf, len, filter) != 0) return null;
         return new List<string>(new string(buf).Split('\0', StringSplitOptions.RemoveEmptyEntries));
     }
 
-    // "ok": a USB4 router (the part that makes the cable a network) is present. "missing": none,
-    // and nothing that looks like USB4 or Thunderbolt either. "unknown": couldn't tell.
+    // The driver service of a present device ("Usb4HostRouter", "QcUsb4Bus"...), or "".
+    static string Service(string id)
+    {
+        if (CM_Locate_DevNodeW(out int dev, id, 0) != 0) return "";
+        var buf = new char[256];
+        int len = buf.Length * 2;
+        if (CM_Get_DevNode_Registry_PropertyW(dev, CM_DRP_SERVICE, out _, buf, ref len, 0) != 0) return "";
+        return new string(buf).Split('\0')[0];
+    }
+
+    // USB4\ROOT_DEVICE_ROUTER&VID_QCOM&PID_0CD1\5&2d0b... -> the part before the instance.
+    static string RouterHardwareId(string id)
+    {
+        if (!id.StartsWith(@"USB4\ROOT_DEVICE_ROUTER", StringComparison.OrdinalIgnoreCase)) return null;
+        int cut = id.IndexOf('\\', 5);
+        return cut > 0 ? id[..cut] : id;
+    }
+
+    // "ok": this laptop has USB4 (what makes the cable a network). "missing": nothing that looks
+    // like USB4 or Thunderbolt. "unknown": couldn't tell.
+    // Some laptops (Qualcomm's) only list their USB4 routers while something is plugged into the
+    // port; what's always there is the USB4 bus or host router, recognised by its driver service.
+    // The router's hardware ID (for the link restart task) then comes from an earlier connection,
+    // or stays null until the cable is plugged in.
     public static string Usb4Status(out string routerHardwareId)
     {
         routerHardwareId = null;
         List<string> ids;
-        try { ids = PresentDevices(); } catch { ids = null; }
+        try { ids = Devices(presentOnly: true); } catch { ids = null; }
         if (ids == null) return "unknown";
-        bool hint = false;
+        bool usb4 = false, hint = false;
         foreach (var id in ids)
         {
+            string router = RouterHardwareId(id);
+            if (router != null) { routerHardwareId ??= router; usb4 = true; continue; }
             string u = id.ToUpperInvariant();
-            if (u.StartsWith(@"USB4\ROOT_DEVICE_ROUTER"))
-            {
-                // USB4\ROOT_DEVICE_ROUTER&VID_QCOM&PID_0CD1\5&2d0b... -> the part before the instance.
-                int cut = id.IndexOf('\\', 5);
-                routerHardwareId ??= cut > 0 ? id[..cut] : id;
-            }
-            else if (u.StartsWith(@"USB4\") || u.Contains("THUNDERBOLT")) hint = true;
+            if (u.StartsWith(@"USB4\") || u.Contains("THUNDERBOLT")) hint = true;
+            if (!usb4)
+                try { usb4 = Service(id).Contains("usb4", StringComparison.OrdinalIgnoreCase); } catch { }
         }
-        if (routerHardwareId != null) return "ok";
-        return hint ? "unknown" : "missing";
+        if (!usb4) return hint ? "unknown" : "missing";
+        if (routerHardwareId == null)
+            try
+            {
+                foreach (var id in Devices(presentOnly: false) ?? new List<string>())
+                    if ((routerHardwareId = RouterHardwareId(id)) != null) break;
+            }
+            catch { }
+        return "ok";
     }
 
     // ---- Theme ----

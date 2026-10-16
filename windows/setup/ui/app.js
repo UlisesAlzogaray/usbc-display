@@ -21,7 +21,7 @@
   const DEFAULTS = {
     laptop: { windowsBuild: 0, arch: '', isAdminUser: true, usb4: 'unknown', installed: false, elevation: 'none', firewallOk: false, recoveryTasksOk: false, installError: '', installing: false },
     link: { adapterUp: false, adapterName: '', secondsSincePlug: 0, macFound: false, macV6: '', macV4: '', laptopV4: '' },
-    server: { running: false, url: 'http://usbc.local', fallbackUrl: '', urlReady: false, pageVisited: false, download: { sent: 0, size: 0, done: false }, appNotarized: false, usingFallback: false },
+    server: { running: false, url: 'http://usbc.local', fallbackUrl: '', urlReady: false, pageVisited: false, download: { sent: 0, size: 0, done: false }, appNotarized: false },
     mac: {
       reachable: false, outdated: false, appVersion: '', macOS: '',
       status: { screenOk: false, axOk: false, screenPrompted: false, axPrompted: false, loginItemEnabled: false, loginItemNeedsApproval: false, sessionActive: false, runningAsAgent: false, inApplications: false, screenNeedsRelaunch: false },

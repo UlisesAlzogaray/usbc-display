@@ -96,8 +96,7 @@ The setup app posts the whole snapshot (`chrome.webview.postMessage` from C#: `P
 ```
 
 Extra fields the setup app also sends: `laptop.missingPayload` (list), `laptop.installError` (text),
-`laptop.installing`, `server.usingFallback` (`url` was switched to `fallbackUrl`), `screen.error`
-(text). `elevation` is `done` when the firewall rules are in place and, when a USB4 router was
+`laptop.installing`, `screen.error` (text). `elevation` is `done` when the firewall rules are in place and, when a USB4 router was
 found, both recovery tasks too; `failed` with `firewallOk` true means only the tasks are missing,
 and setup can go on.
 

@@ -69,7 +69,7 @@ sealed class Wizard
 
     // ---- Watching the laptop and the cable ----
 
-    DateTime plugAt, urlReadyAt, lastRequestAt = DateTime.MinValue, lastServerTry = DateTime.MinValue, lastNeighbors = DateTime.MinValue, lastPoke = DateTime.MinValue;
+    DateTime plugAt, lastServerTry = DateTime.MinValue, lastNeighbors = DateTime.MinValue, lastPoke = DateTime.MinValue;
     IPAddress macV6;
     int macMisses;  // neighbour-table reads in a row without the Mac; it counts as gone after 3
     readonly object serverGate = new();  // StartServers vs Shutdown (UI thread)
@@ -104,10 +104,27 @@ sealed class Wizard
                   $"installed {S.Laptop.Installed}, firewall {fw}, tasks {tasks}");
     }
 
+    // The cable's network is up, so this laptop's USB4 works, whatever the check at start found
+    // (some laptops only list their USB4 routers while something is plugged in). The check runs
+    // again for the router's hardware ID, which is listed now.
+    void CableProvesUsb4()
+    {
+        string usb4 = Machine.Usb4Status(out string router);
+        lock (gate)
+        {
+            if (router != null) routerHardwareId = router;
+            Set(ref S.Laptop.Usb4, "ok");
+        }
+        Log.Write($"laptop: usb4 ok, the cable's network is up (check now: {usb4}, {router})");
+    }
+
     void Tick()
     {
         var now = DateTime.UtcNow;
         var c = Cable.Find();
+        bool usb4Proven;
+        lock (gate) usb4Proven = c != null && S.Laptop.Usb4 != "ok";
+        if (usb4Proven) CableProvesUsb4();
         lock (gate)
         {
             var L = S.Link;
@@ -123,8 +140,6 @@ sealed class Wizard
                 Set(ref L.LaptopV4, "");
                 Set(ref S.Server.FallbackUrl, "");
                 Set(ref S.Server.UrlReady, false);
-                Set(ref S.Server.Url, "http://" + Mdns.HostName);
-                Set(ref S.Server.UsingFallback, false);
                 macV6 = null;
                 macMisses = 0;
             }
@@ -174,18 +189,9 @@ sealed class Wizard
         {
             bool running = web.Running;
             Set(ref S.Server.Running, running);
-            bool ready = running && S.Link.MacFound;
-            if (ready && !S.Server.UrlReady) urlReadyAt = now;
-            Set(ref S.Server.UrlReady, ready);
-            // usbc.local got no visit within 30 s: show the laptop's cable address instead, once
-            // the Mac has an IPv4 address on the cable too (before that the address can't work).
-            if (ready && !S.Server.UsingFallback && lastRequestAt < urlReadyAt && now - urlReadyAt > TimeSpan.FromSeconds(30) &&
-                S.Link.MacV4 != "" && S.Server.FallbackUrl != "")
-            {
-                Set(ref S.Server.Url, S.Server.FallbackUrl);
-                Set(ref S.Server.UsingFallback, true);
-                Log.Write("web: no visit to usbc.local in 30 s, showing " + S.Server.FallbackUrl);
-            }
+            // usbc.local stays the address to type. The cable's IPv4 address is only offered as a
+            // second try: a Mac on Wi-Fi sends 169.254.x.x out over Wi-Fi, so it often can't work.
+            Set(ref S.Server.UrlReady, running && S.Link.MacFound);
             Set(ref S.Screen.Running, receiver.Running);
             if (!S.Screen.Running) Set(ref S.Screen.Showing, false);
         }
@@ -217,7 +223,7 @@ sealed class Wizard
 
     // ---- Events from the servers, the Mac and the screen ----
 
-    public void OnWebRequest(string path) { lock (gate) lastRequestAt = DateTime.UtcNow; Log.Write("web: GET " + path); }
+    public void OnWebRequest(string path) => Log.Write("web: GET " + path);
     public void OnPageVisited() { lock (gate) Set(ref S.Server.PageVisited, true); }
 
     public void OnDownload(long sent, long size, bool done)

@@ -290,22 +290,20 @@
     skip: (s) => !macNeedsApp(s),
     done: (s) => s.server.pageVisited,
     render(s, L) {
-      // The setup app swaps server.url to the laptop's cable address by
-      // itself when usbc.local gets no visit (server.usingFallback).
       const url = s.server.url || s.server.fallbackUrl;
       const host = hostOf(url);
       const ready = s.server.urlReady && host;
-      const fb = s.server.usingFallback === true;
       const outdated = s.mac.outdated;
-      const alt = !fb && ready && s.server.fallbackUrl && hostOf(s.server.fallbackUrl) !== host && L.since > 45;
+      // The cable's IPv4 address only as a second try: a Mac on Wi-Fi often sends it out over Wi-Fi.
+      const alt = ready && s.server.fallbackUrl && hostOf(s.server.fallbackUrl) !== host && L.since > 45;
       const stuck = !s.server.running && L.since > 20;
       const scheme = (u) => { const m = /^(https?:\/\/)?(.*)$/.exec(String(u)); return '<span class="sch">' + esc(m[1] || 'http://') + '</span>' + esc(m[2].replace(/\/$/, '')); };
       const box = ready
         ? '<div class="urlbox"><span class="cap">' + I('mac') + 'Type this on your Mac, exactly as shown</span><span class="u' + (host.length > 12 ? ' long' : '') + '">' + scheme(url) + '</span></div>'
         : '<div class="urlbox waiting"><span class="u">' + h.spin() + 'Getting the address ready…</span></div>';
       const notes = [];
+      if (ready) notes.push('Saw a search page instead? Check that it starts with <b>http://</b>.');
       if (alt) notes.push('Still nothing? Type this instead: <b>' + esc(s.server.fallbackUrl) + '</b>');
-      else if (ready) notes.push(fb ? 'This is this laptop’s cable address. It works the same way.' : 'Saw a search page instead? Check that it starts with <b>http://</b>.');
       return {
         lane: 'mac', scene: D.scenes.safari(host || 'usbc.local'), stage: 'mid',
         title: outdated ? 'Get the newer app' : 'On your Mac, open Safari',
