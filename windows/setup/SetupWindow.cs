@@ -25,16 +25,18 @@ sealed class SetupWindow : Form
 
     readonly Wizard wizard;
     readonly bool resumed;
+    readonly IntPtr behind;  // the downloaded copy's window, which this one takes over from
     readonly WebView2 web;
     readonly System.Windows.Forms.Timer poster = new() { Interval = 100 };  // state at most 10 times a second
     CoreWebView2Environment env;
     bool mica;
     bool appRegion;  // the runtime supports CSS app-region (WebView2 1.0.2420 and later)
 
-    public SetupWindow(Wizard wizard, Point? at, bool resumed)
+    public SetupWindow(Wizard wizard, Point? at, bool resumed, IntPtr behind)
     {
         this.wizard = wizard;
         this.resumed = resumed;
+        this.behind = behind;
         SuspendLayout();
         AutoScaleMode = AutoScaleMode.None;  // sized by hand below, per monitor
         Text = "USB-C Display Setup";
@@ -66,6 +68,17 @@ sealed class SetupWindow : Form
         size = new Size(Math.Min(size.Width, wa.Width), Math.Min(size.Height, wa.Height));
         var loc = at ?? new Point(wa.Left + (wa.Width - size.Width) / 2, wa.Top + (wa.Height - size.Height) / 2);
         Bounds = new Rectangle(loc, size);
+    }
+
+    // Taking over from the downloaded copy: open in its exact spot but underneath it, and come
+    // forward only when the page shows the right step ("shown"). The swap then looks like nothing.
+    protected override bool ShowWithoutActivation => behind != IntPtr.Zero;
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        if (behind != IntPtr.Zero)
+            Native.SetWindowPos(Handle, behind, 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
     }
 
     protected override void OnDpiChanged(DpiChangedEventArgs e)
@@ -134,7 +147,10 @@ sealed class SetupWindow : Form
         try
         {
             string data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "USB-C Display", "WebView2");
-            env = await CoreWebView2Environment.CreateAsync(null, data, new CoreWebView2EnvironmentOptions());
+            // Keeps painting while covered: the installed copy draws its first screen behind the
+            // downloaded copy's window, so the swap shows no reload.
+            env = await CoreWebView2Environment.CreateAsync(null, data, new CoreWebView2EnvironmentOptions
+                { AdditionalBrowserArguments = "--disable-features=CalculateNativeWinOcclusion" });
             await web.EnsureCoreWebView2Async(env);
         }
         catch (Exception ex)
@@ -184,13 +200,7 @@ sealed class SetupWindow : Form
             a.Cancel = true;
             OpenExternal(a.Uri);
         };
-        core.NavigationCompleted += (_, a) =>
-        {
-            web.Focus();
-            if (!resumed) return;
-            // Tell the copy that started this one that it can close now.
-            try { using var ev = EventWaitHandle.OpenExisting(Program.ResumedEventName); ev.Set(); } catch { }
-        };
+        core.NavigationCompleted += (_, a) => web.Focus();
         await core.AddScriptToExecuteOnDocumentCreatedAsync(HostScript());
         core.Navigate(Origin + "/index.html");
         poster.Start();
@@ -205,7 +215,7 @@ sealed class SetupWindow : Form
     // Tells the page about the window: 'no-mica' on <html> when it must paint its own background,
     // the accent colours as CSS variables (--accent, --accent-system, --accent-light-1..3,
     // --accent-dark-1..3),
-    // and window.usbcHost = { mica, dark, windowsBuild, appRegion }. Without app-region support in
+    // and window.usbcHost = { mica, dark, windowsBuild, appRegion, resumed }. Without app-region support in
     // the runtime, a press on an `app-region: drag` element posts startDrag instead.
     string HostScript()
     {
@@ -214,6 +224,7 @@ sealed class SetupWindow : Form
         string host = JsonSerializer.Serialize(new Dictionary<string, object>
         {
             ["mica"] = mica, ["dark"] = dark, ["windowsBuild"] = Machine.WindowsBuild, ["appRegion"] = appRegion,
+            ["resumed"] = resumed,  // the installed copy carrying on right after Install
         });
         return $$"""
             (() => {
@@ -306,6 +317,7 @@ sealed class SetupWindow : Form
         switch (cmd)
         {
             case "ready": wizard.Changed(); Post(); break;
+            case "shown": PageShown(); break;
             case "install": wizard.InstallNow(); break;
             case "elevate": wizard.Elevate(); break;
             case "macAction": wizard.MacAction(Str(m, "action")); break;
@@ -351,9 +363,21 @@ sealed class SetupWindow : Form
 
     public void ShowFromOtherInstance() => BeginInvokeSafe(BringForward);
 
+    // The page shows its first real step. Taking over from the downloaded copy, that copy can
+    // close now: this window, right underneath it, comes forward.
+    bool shownOnce;
+    void PageShown()
+    {
+        if (shownOnce || !resumed) return;
+        shownOnce = true;
+        try { using var ev = EventWaitHandle.OpenExisting(Program.ResumedEventName); ev.Set(); } catch { }
+        if (behind != IntPtr.Zero)
+            Task.Run(async () => { await Task.Delay(150); BeginInvokeSafe(BringForward); });  // once the old window has gone
+    }
+
     // The install just put a copy in %LOCALAPPDATA%\Programs: carry on from there, so the firewall
-    // rule (which names that copy) applies. The new window opens in the same place; this one
-    // closes once it shows.
+    // rule (which names that copy) applies. The new window opens in the same place, underneath
+    // this one, and this one closes once the new one shows the same step.
     void HandOff()
     {
         Log.Write("handoff: continuing from " + Install.SetupPath);
@@ -362,8 +386,9 @@ sealed class SetupWindow : Form
         var ready = new EventWaitHandle(false, EventResetMode.ManualReset, Program.ResumedEventName);
         try
         {
-            Process.Start(new ProcessStartInfo(Install.SetupPath, $"--resume --at {Left},{Top}")
-                { UseShellExecute = false, WorkingDirectory = Install.Dir })?.Dispose();
+            using var p = Process.Start(new ProcessStartInfo(Install.SetupPath, $"--resume --at {Left},{Top} --behind {Handle.ToInt64()}")
+                { UseShellExecute = false, WorkingDirectory = Install.Dir });
+            if (p != null) Native.AllowSetForegroundWindow(p.Id);  // it comes forward when this one closes
         }
         catch (Exception e)
         {

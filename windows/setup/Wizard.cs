@@ -307,7 +307,13 @@ sealed class Wizard
                 Set(ref S.Laptop.InstallError, error);
                 Set(ref S.Laptop.Installed, error == "" && Install.IsInstalled);
             }
-            if (error == "" && !Install.RunningInstalled) InstalledElsewhere?.Invoke();
+            if (error == "" && !Install.RunningInstalled)
+            {
+                // Long enough to see "Installed" and for the page to move on: the installed copy
+                // then opens on that same next step.
+                Thread.Sleep(1600);
+                InstalledElsewhere?.Invoke();
+            }
         });
     }
 

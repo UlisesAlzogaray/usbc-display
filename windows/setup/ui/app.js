@@ -123,6 +123,7 @@
     }
   }
 
+  let shownSent = false;
   function onState(msg) {
     if (!msg || msg.type !== 'state') return;
     S = merge(DEFAULTS, msg);
@@ -142,12 +143,22 @@
         if (!S.mac.reachable) L.unreachSince = L.enteredAt;
       } else {
         loadPlace();
+        // The installed copy carrying on right after Install: past Welcome and Check whatever
+        // storage says (the downloaded copy may close before its storage reaches the disk).
+        if (window.usbcHost && window.usbcHost.resumed) { L.started = true; L.checkSeen = true; }
         if (L.started) L.pos = nextFrom(idx('welcome'));
       }
     }
     if (S.mac.reachable) L.unreachSince = 0; else if (!L.unreachSince) L.unreachSince = Date.now();
     autoAdvance();
     render();
+    if (!shownSent) {
+      // Once this first real step is painted, the window may come forward (see SetupWindow.PageShown).
+      // Painted while covered, a frame can take a moment to reach the screen: two frames alone
+      // showed "Getting ready…" for one frame when the window in front closed.
+      shownSent = true;
+      requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => send({ cmd: 'shown' }), 250)));
+    }
   }
   D.receive = onState;
   D.currentStep = () => steps[L.pos].id;

@@ -3,7 +3,7 @@
 // through every step on both machines (windows/setup/README.md, CONTRACT.md).
 //
 // usage: "USB-C Display Setup.exe" [--uninstall]
-//   --resume --at X,Y      the installed copy taking over from the downloaded one (internal)
+//   --resume --at X,Y --behind HWND   the installed copy taking over from the downloaded one (internal)
 //   --elevated <SID>       the admin step, run through UAC by the app itself (internal)
 //   --elevated-remove      undoes the admin step when uninstalling (internal)
 
@@ -63,6 +63,7 @@ static class Program
 
         bool resumed = false;
         Point? at = null;
+        IntPtr behind = IntPtr.Zero;
         for (int i = 0; i < args.Length; i++)
         {
             if (args[i] == "--resume") resumed = true;
@@ -71,11 +72,12 @@ static class Program
                 var p = args[++i].Split(',');
                 if (p.Length == 2 && int.TryParse(p[0], out int x) && int.TryParse(p[1], out int y)) at = new Point(x, y);
             }
+            else if (args[i] == "--behind" && i + 1 < args.Length && long.TryParse(args[++i], out long h)) behind = new IntPtr(h);
         }
 
         Log.Write($"setup: start {Environment.ProcessPath} {string.Join(' ', args)}");
         var wizard = new Wizard();
-        var window = new SetupWindow(wizard, at, resumed);
+        var window = new SetupWindow(wizard, at, resumed, behind);
         new Thread(() => { while (show.WaitOne()) window.ShowFromOtherInstance(); }) { IsBackground = true, Name = "Show" }.Start();
         Application.Run(window);
         return 0;
