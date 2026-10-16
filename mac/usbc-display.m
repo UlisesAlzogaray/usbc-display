@@ -123,7 +123,7 @@ enum { HELLO_CAN_H264 = 1, HELLO_TEST_CARD = 2,
 // sends it again whenever a bit changes. More QUERYs on the same connection run more actions.
 #define MAGIC_QUERY  0x51444355u // "UCDQ"
 #define MAGIC_STATUS 0x49444355u // "UCDI"
-#define APP_VERSION 1            // the app's build number; build.sh copies it into Info.plist
+#define APP_VERSION 2            // the app's build number; build.sh copies it into Info.plist
 enum { ST_SCREEN_OK = 1, ST_AX_OK = 2, ST_SCREEN_PROMPTED = 4, ST_AX_PROMPTED = 8,
        ST_LOGIN_ITEM_ENABLED = 16, ST_LOGIN_ITEM_NEEDS_APPROVAL = 32, ST_SESSION_ACTIVE = 64,
        ST_RUNNING_AS_AGENT = 128, ST_IN_APPLICATIONS = 256, ST_SCREEN_NEEDS_RELAUNCH = 512 };
