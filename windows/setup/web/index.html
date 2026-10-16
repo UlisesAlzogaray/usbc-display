@@ -92,6 +92,16 @@
   .next li { margin: 6px 0; }
   .next .laptop { font-weight: 600; }
 
+  /* After the download the Download button steps back, and (when the app isn't notarized) the
+     way to Open Anyway comes forward. */
+  .download.again { background: transparent; color: var(--blue); box-shadow: inset 0 0 0 2px var(--blue); min-width: 0; padding: 10px 22px; font-size: 16px; }
+  .unblock { display: none; text-align: left; margin: 18px 0 0; padding: 22px 24px; border-radius: 16px; background: var(--soft); }
+  html[data-notarized="false"] .unblock.show { display: block; animation: rise 0.35s ease-out; }
+  .unblock h2 { font-size: 19px; margin: 0 0 8px; }
+  .unblock p { margin: 0 0 14px; }
+  .unblock .download { min-width: 0; width: 100%; font-size: 17px; padding: 14px 24px; }
+  .unblock .meta { margin: 10px 0 0; text-align: center; }
+
   .missing { display: none; color: var(--muted); }
   html[data-has-app="false"] .missing { display: block; }
   html[data-has-app="false"] .offer { display: none; }
@@ -146,6 +156,13 @@
         <li class="laptop">Then come back to your laptop. It shows you every next step.</li>
       </ol>
     </section>
+
+    <section class="unblock" id="unblock" aria-live="polite">
+      <h2>Your Mac said it can’t check the app?</h2>
+      <p>Click <b>Done</b> in that box, then click below. In the window that opens, click <b>Open Anyway</b>.</p>
+      <a class="download" id="settings" href="x-apple.systempreferences:com.apple.preference.security?Security">Open Privacy &amp; Security</a>
+      <p class="meta">If Safari asks to open System Settings, click <b>Allow</b>.</p>
+    </section>
   </div>
 
   <p class="missing">This copy of USB-C Display Setup doesn't include the Mac app. Get a complete copy of the setup on your laptop, then come back to this page.</p>
@@ -155,9 +172,18 @@
   </div>
 </main>
 <script>
+  // Tells the laptop where you are (Safari in front or not, the settings button clicked), so it
+  // can show the matching step. Just that word, to the laptop, over the cable.
+  function report(e) {
+    try { fetch('/event?e=' + e, { cache: 'no-store', keepalive: true }); } catch (x) { /* fine */ }
+  }
+  window.addEventListener('focus', function () { report('focus'); });
+  window.addEventListener('blur', function () { report('blur'); });
+  document.getElementById('settings').addEventListener('click', function () { report('settings'); });
   document.getElementById('download').addEventListener('click', function () {
-    var next = document.getElementById('next');
-    next.classList.add('show');
+    document.getElementById('next').classList.add('show');
+    document.getElementById('unblock').classList.add('show');
+    this.classList.add('again');
     this.lastChild.textContent = ' Download again';
   });
 </script>

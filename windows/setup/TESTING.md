@@ -164,6 +164,15 @@ flags copied onto the test copy (`01c3` on the folder, `00c3`/`0083` inside):
 
 ### 14. First picture and Try it out
 - [ ] "Show my Mac's screen" goes full screen on the laptop with the Mac's wallpaper.
+- [x] The handover (Mac app 4): the window stays put and only the background changes. Measured
+      with a 20 fps recording of the laptop (Oct 2026, 150 % on the laptop, 1.25 px a point on
+      the Mac): one frame from Windows to the Mac, same step and footer, macOS's buttons top left,
+      text within about 1 px, colours the same (the panel profile waits until the window closes).
+- [x] Clicks in the Mac's copy reach the laptop's (setup.log: "… (on the Mac)").
+- [x] Finish closes the Mac's copy, the picture stays, and the Mac log says the panel profile is
+      applied again.
+- [x] The watcher shows no "Can't reach the Mac yet" balloon while the setup's picture is up
+      (it used to: it counted the setup's receiver as its own).
 - [ ] Where does macOS place the new display by default (left or right of the Mac)? The wizard
       says "slide off the right edge".
 - [ ] Ctrl + Alt + Esc gives the laptop back, and the wizard comes back with "Welcome back".

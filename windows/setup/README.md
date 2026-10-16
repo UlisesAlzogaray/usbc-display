@@ -44,7 +44,10 @@ Mac app.
   status (CONTRACT.md section 1), again every 2 s if it isn't there. An app that closes the
   connection on the question is an older build: `mac.outdated`.
 - **The screen.** `startScreen` runs the installed receiver with the saved size, colour and input
-  settings, as the watcher does, and watches for its "Showing" line.
+  settings, as the watcher does, and watches for its "Picture on screen" line. With Mac app 4
+  the Mac first opens this same window on its new screen, at the same place and size
+  (CONTRACT.md section 5): when the picture shows, only what's behind the window changes, and
+  from then on the window on the laptop is the Mac's, its clicks done here.
 - **After setup.** `finish` sets `SetupDone`. Until then, plugging in the cable makes the watcher
   open this app instead of its "Use as a screen / Data transfer" popup.
 

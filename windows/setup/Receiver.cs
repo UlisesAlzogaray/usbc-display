@@ -24,13 +24,14 @@ sealed class Receiver
         }
     }
 
-    public string Start(int scale, bool matchColors, bool useInput)
+    public string Start(int scale, bool matchColors, bool useInput, bool afterMacWindow = false)
     {
         if (Running) return null;  // already up (started here or by the watcher)
         string exe = File.Exists(Install.ReceiverPath) ? Install.ReceiverPath : Path.Combine(AppContext.BaseDirectory, "UsbcDisplay.exe");
         if (!File.Exists(exe)) return "The screen part of USB-C Display isn't installed yet.";
 
-        string args = $"--exit-when-unplugged --scale {scale}" + (matchColors ? "" : " --no-color-profile") + (useInput ? "" : " --no-input");
+        string args = $"--exit-when-unplugged --scale {scale}" + (matchColors ? "" : " --no-color-profile") + (useInput ? "" : " --no-input") +
+                      (afterMacWindow ? " --after-mac-window" : "");
         var psi = new ProcessStartInfo(exe, args)
         {
             UseShellExecute = false,
@@ -40,6 +41,7 @@ sealed class Receiver
             WorkingDirectory = Path.GetDirectoryName(exe),
         };
         psi.EnvironmentVariables.Remove("DOTNET_ROOT");
+        CloseLog();  // the last run's, or this one couldn't open the file
         try
         {
             Directory.CreateDirectory(Log.Dir);
@@ -51,7 +53,9 @@ sealed class Receiver
         DataReceivedEventHandler onLine = (_, e) =>
         {
             if (e.Data == null) return;
-            if (e.Data.StartsWith("Showing")) wizard.OnScreen(running: true, showing: true);
+            // "Picture on screen" when its window shows (after the Mac's copy of the setup window
+            // is drawn, with --after-mac-window), not when its renderer starts ("Showing ...").
+            if (e.Data.StartsWith("Picture on screen")) wizard.OnScreen(running: true, showing: true);
             var l = log;
             if (l != null) lock (l) { try { l.WriteLine(e.Data); } catch { } }
         };
@@ -60,6 +64,8 @@ sealed class Receiver
         p.Exited += (_, _) =>
         {
             Log.Write("screen: receiver exited");
+            try { p.WaitForExit(); } catch { }  // its last lines
+            if (process == p) CloseLog();
             wizard.OnScreen(running: false, showing: false);
         };
         try
@@ -78,6 +84,27 @@ sealed class Receiver
         Log.Write($"screen: started {exe} {args}");
         wizard.OnScreen(running: true, showing: false);
         return null;
+    }
+
+    void CloseLog()
+    {
+        var l = log;
+        log = null;
+        if (l != null) lock (l) { try { l.Dispose(); } catch { } }
+    }
+
+    // Closes the screen the way Ctrl+Alt+Esc does (its window closes and it quits).
+    public void Stop()
+    {
+        foreach (var p in Process.GetProcessesByName("UsbcDisplay"))
+        {
+            try
+            {
+                if (!p.CloseMainWindow() || !p.WaitForExit(3000)) p.Kill();
+            }
+            catch { }
+            finally { p.Dispose(); }
+        }
     }
 
     [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool AllowSetForegroundWindow(int processId);

@@ -27,7 +27,7 @@ The Mac answers with a 32-byte CtlMsg with magic `UCDI`, keeps the socket open, 
 | 8 | u64 | `appVersion << 16 \| PROTOCOL_VERSION` |
 | 16 | u64 | macOS `major << 32 \| minor << 16 \| patch` |
 | 24 | u32 | refuse reason (0 none, 1 no Screen Recording) |
-| 28 | u32 | 0 |
+| 28 | u32 | the Mac's accent colour: `AppleAccentColor + 2` (1 graphite, 2 red … 8 pink), 0 multicolour (Mac app 4; 0 before) |
 
 Status bits:
 
@@ -43,13 +43,18 @@ Status bits:
 | 128 | RUNNING_AS_AGENT | this process is the login agent (not a Finder-launched copy) |
 | 256 | IN_APPLICATIONS | the app runs from /Applications (not Downloads, not translocated) |
 | 512 | SCREEN_NEEDS_RELAUNCH | permission granted in Settings but this process must restart to use it |
+| 1024 | SETTINGS_FRONT | System Settings is the frontmost app (Mac app 4) |
+| 2048 | PROMPT_UP | a macOS permission prompt (`universalAccessAuthWarn`) is on screen (Mac app 4) |
+| 4096 | MAC_DARK | the Mac is in Dark mode (Mac app 4) |
+
+The probe polls these every 250 ms, so the wizard follows what the Mac shows as it happens.
 
 Actions (UCDQ `actions`):
 
 | Bit | Action |
 |---|---|
-| 1 | request Screen Recording / open Privacy & Security › Screen & System Audio Recording |
-| 2 | show the Accessibility prompt / open Privacy & Security › Accessibility |
+| 1 | request Screen Recording (macOS's prompt); if no prompt shows within 1.2 s, open Privacy & Security › Screen & System Audio Recording |
+| 2 | the same for Accessibility (macOS 27: Device Control and Data Access) |
 | 4 | open System Settings › General › Login Items |
 | 8 | relaunch the agent (so a new Screen Recording grant takes effect) |
 | 16 | move the app to /Applications and relaunch from there |
@@ -77,14 +82,17 @@ The setup app posts the whole snapshot (`chrome.webview.postMessage` from C#: `P
   "server": {
     "running": false, "url": "http://usbc.local", "fallbackUrl": "http://169.254.29.64",
     "urlReady": false, "pageVisited": false,
+    "pageFocused": false, "pageBlurs": 0, "settingsOpened": false,
     "download": { "sent": 0, "size": 0, "done": false },
     "appNotarized": false
   },
   "mac": {
     "reachable": false, "outdated": false, "appVersion": "", "macOS": "",
+    "appearance": "dark | light | ''", "accent": "purple | blue | … | ''",
     "status": { "screenOk": false, "axOk": false, "screenPrompted": false, "axPrompted": false,
                 "loginItemEnabled": false, "loginItemNeedsApproval": false, "sessionActive": false,
-                "runningAsAgent": false, "inApplications": false, "screenNeedsRelaunch": false }
+                "runningAsAgent": false, "inApplications": false, "screenNeedsRelaunch": false,
+                "settingsFront": false, "promptUp": false }
   },
   "screen": { "running": false, "showing": false, "pointerOnLaptop": false },
   "settings": {
@@ -100,6 +108,11 @@ Extra fields the setup app also sends: `laptop.missingPayload` (list), `laptop.i
 found, both recovery tasks too; `failed` with `firewallOk` true means only the tasks are missing,
 and setup can go on.
 
+`server.pageFocused`, `pageBlurs` and `settingsOpened` come from the download page in Safari
+(`/event?e=focus|blur|settings`, below): Gatekeeper's box takes the focus from Safari, so the
+wizard knows when it is up without seeing the Mac's screen. `pageBlurs` counts from the end of
+the download. `mac.appearance` and `mac.accent` let the Mac scenes use the Mac's own look.
+
 ## 3. Commands (UI → setup app)
 
 `window.chrome.webview.postMessage({ cmd, ... })`:
@@ -111,7 +124,8 @@ and setup can go on.
 | `elevate` | | the single UAC prompt: firewall rule (cable-only) + recovery tasks |
 | `macAction` | `action`: `screen` \| `accessibility` \| `loginItems` \| `relaunch` \| `moveToApplications` | sends UCDQ with that bit |
 | `saveSettings` | `scale`, `matchColors`, `useLaptopInput` | writes HKCU\Software\USB-C Display |
-| `startScreen` | | launches the receiver with the saved settings |
+| `startScreen` | | launches the receiver with the saved settings; with Mac app 4, the Mac first opens this window on its new screen (section 5) |
+| `stopScreen` | | closes the receiver (Windows back); this window is there again |
 | `copy` | `text` | clipboard (handled, not used by the current UI) |
 | `finish` | | sets SetupDone, hands over to the tray watcher, closes |
 | `close` | | closes the window (setup can resume later) |
@@ -121,8 +135,32 @@ and setup can go on.
 
 | Path | Content |
 |---|---|
-| `/` | landing page: one big "Download USB-C Display" button, says the file comes from the laptop over the cable |
+| `/` | landing page: one big "Download USB-C Display" button, says the file comes from the laptop over the cable; after the download, an "Open Privacy & Security" button |
 | `/USB-C-Display.zip` | the Mac app (`mac/dist/USB-C-Display.zip`, made by `mac/build.sh`) |
 | `/icon.png` | app icon |
+| `/event?e=focus\|blur\|settings` | the page reports Safari's focus and the Privacy & Security click (204) |
 
 Anything else: 404. Requests from addresses that aren't on the cable interface are refused.
+
+## 5. The handover: this window moves to the Mac's new screen (Mac app 4)
+
+When the picture starts, the laptop's window stays exactly where it is and only what's behind
+it changes. The Mac draws the same wizard (bundled in the app as `Contents/Resources/setup-ui`)
+in a borderless window with macOS's own buttons, at the same place and size; the receiver shows
+the picture only once a frame with that window has been sent.
+
+All on the status-probe connection, except UCDV:
+
+| Magic | Direction | Content |
+|---|---|---|
+| `UCDX` `0x58444355` | setup → Mac, 16-byte WinMsg | `a = x \| y << 16`, `b = w \| h << 16` (the window's client area in panel pixels), `c` = Windows DPI %. `w = 0` closes the Mac's window. Sent just before the receiver starts. |
+| `UCDE` `0x45444355` | setup → Mac, WinMsg then JSON | `a` = length; the wizard's state snapshot plus `local` (its position in the steps) and `look` (`theme`), mirrored on every change |
+| `UCDC` `0x43444355` | Mac → setup, 32-byte header then JSON | `{magic, length}`; `{cmd: "act", act, data}`: a click in the Mac's copy, done by the laptop's copy |
+| `UCDV` `0x56444355` | Mac → receiver (screen control connection) | `a` = the last frame sent: it has the window in it. The receiver started with `--after-mac-window` shows the picture once it has shown that frame (or 6 s after the first frame) and prints "Picture on screen." |
+
+Placement: the Mac maps panel pixels to points with the session's pixels per point and rounds
+each edge to the nearest point (macOS puts windows on whole points), and zooms the page so CSS
+pixels have the same physical size (`dpi / 100 / f`). While the window is on the new screen the
+laptop panel's colour profile waits (the laptop's copy isn't colour-managed, so the colours
+would jump at the cut); it is applied when the window closes. The window closes on `w = 0` or
+when the setup's connection ends.

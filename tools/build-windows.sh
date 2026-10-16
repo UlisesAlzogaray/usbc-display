@@ -53,7 +53,7 @@ cat > "$BUILD/watcher/UsbcWatcher.csproj" <<EOF
     <DebugType>none</DebugType>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="$ROOT/windows/watcher/UsbcWatcher.cs" />
+    <Compile Include="../../../../watcher/UsbcWatcher.cs" />  <!-- relative: works from Git Bash too -->
     <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Drawing" />
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />

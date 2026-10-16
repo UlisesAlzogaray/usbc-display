@@ -38,8 +38,15 @@ static class Proto
                       QueryRelaunch = 8, QueryMoveToApplications = 16;
     public const uint StatusScreenOk = 1, StatusAxOk = 2, StatusScreenPrompted = 4, StatusAxPrompted = 8,
                       StatusLoginItemEnabled = 16, StatusLoginItemNeedsApproval = 32, StatusSessionActive = 64,
-                      StatusRunningAsAgent = 128, StatusInApplications = 256, StatusScreenNeedsRelaunch = 512;
+                      StatusRunningAsAgent = 128, StatusInApplications = 256, StatusScreenNeedsRelaunch = 512,
+                      // What's on the Mac's screen now (Mac app 4): the setup shows the same.
+                      StatusSettingsFront = 1024, StatusPromptUp = 2048, StatusMacDark = 4096;
     public const uint RefuseNone = 0, RefuseNoScreenRecording = 1;
+    // The handover when the picture starts (Mac app 4): the setup tells the Mac where its window
+    // is ("UCDX" {x | y << 16, w | h << 16, dpi %} in panel pixels; w = 0 closes it) and mirrors
+    // its state ("UCDE" {length} + JSON); the Mac's copy sends clicks back ("UCDC", 32 bytes:
+    // {magic, length} + JSON) and tells the receiver once it's drawn ("UCDV" {first frame with it}).
+    public const uint SetupWindow = 0x58444355, Mirror = 0x45444355, Click = 0x43444355, WindowReady = 0x56444355;
     public const ushort HelloStatus = 1024;  // answer a refused Hello with Info instead of closing
 
     // ptW x ptH: the size the Mac's display should look like, in points (0 = from the scale).

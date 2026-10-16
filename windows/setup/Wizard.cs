@@ -25,6 +25,46 @@ sealed class Wizard
     public event Action InstalledElsewhere;
     public event Action ScreenClosed;
 
+    // ---- The handover when the picture starts ----
+    // The Mac opens this same window, in the same spot, on its new screen (Mac app 4 and later):
+    // the receiver shows the picture only once that window is drawn, so on the laptop only what's
+    // behind the window changes. Meanwhile the laptop's copy stays in charge: its state and place
+    // go to the Mac's copy (mirror), and clicks there come back here (RemoteClick).
+    public Func<(System.Drawing.Rectangle Panel, int DpiPercent)?> WindowPlace;  // set by SetupWindow
+    public event Action<string> RemoteClick;  // JSON {act, data}, raised on the probe's thread
+    volatile bool mirroring;
+    string mirrorState = "", mirrorLocal = "", mirrorSent = "";
+
+    // The page's place and look (app.js sendMirror), as JSON {local, look}.
+    public void SetMirrorLocal(string json) { lock (gate) mirrorLocal = json; MirrorIfChanged(); }
+
+    // Called with every state snapshot posted to the page.
+    public void StatePosted(string json) { lock (gate) mirrorState = json; MirrorIfChanged(); }
+
+    void MirrorIfChanged()
+    {
+        if (!mirroring) return;
+        string m;
+        lock (gate)
+        {
+            if (mirrorState == "" || mirrorLocal.Length < 2) return;
+            m = "{\"type\":\"mirror\",\"state\":" + mirrorState + "," + mirrorLocal[1..];
+            if (m == mirrorSent) return;
+            mirrorSent = m;
+        }
+        probe.SendMirror(System.Text.Encoding.UTF8.GetBytes(m));
+    }
+
+    public void OnRemoteClick(string json) => RemoteClick?.Invoke(json);
+
+    // Closes the Mac's copy (Finish, or the picture stopped).
+    void EndHandover()
+    {
+        if (!mirroring) return;
+        mirroring = false;
+        probe.SendWindow(System.Drawing.Rectangle.Empty, 0);
+    }
+
     public Wizard()
     {
         web = new WebServer(this);
@@ -226,13 +266,28 @@ sealed class Wizard
     public void OnWebRequest(string path) => Log.Write("web: GET " + path);
     public void OnPageVisited() { lock (gate) Set(ref S.Server.PageVisited, true); }
 
+    public void OnPageEvent(string e)
+    {
+        lock (gate)
+        {
+            var sv = S.Server;
+            if (e == "blur" && sv.PageFocused) Set(ref sv.PageBlurs, sv.PageBlurs + 1);
+            if (e is "blur" or "focus") Set(ref sv.PageFocused, e == "focus");
+            if (e == "settings") Set(ref sv.SettingsOpened, true);
+        }
+    }
+
     public void OnDownload(long sent, long size, bool done)
     {
         lock (gate)
         {
             Set(ref S.Server.Download.Sent, sent);
             Set(ref S.Server.Download.Size, size);
-            if (done) Set(ref S.Server.Download.Done, true);
+            if (done)
+            {
+                Set(ref S.Server.Download.Done, true);
+                Set(ref S.Server.PageBlurs, 0);  // counts from here: leaving Safari now means opening the app
+            }
         }
         if (done) Log.Write($"web: download complete, {size} bytes");
     }
@@ -260,6 +315,17 @@ sealed class Wizard
             Set(ref st.RunningAsAgent, Bit(Proto.StatusRunningAsAgent));
             Set(ref st.InApplications, Bit(Proto.StatusInApplications));
             Set(ref st.ScreenNeedsRelaunch, Bit(Proto.StatusScreenNeedsRelaunch));
+            Set(ref st.SettingsFront, Bit(Proto.StatusSettingsFront));
+            Set(ref st.PromptUp, Bit(Proto.StatusPromptUp));
+            if (i.AppVersion >= 4)
+            {
+                Set(ref m.Appearance, Bit(Proto.StatusMacDark) ? "dark" : "light");
+                Set(ref m.Accent, i.Accent switch
+                {
+                    1 => "graphite", 2 => "red", 3 => "orange", 4 => "yellow", 5 => "green", 6 => "blue", 7 => "purple", 8 => "pink",
+                    _ => "multicolor",
+                });
+            }
         }
     }
 
@@ -283,7 +349,11 @@ sealed class Wizard
             Set(ref S.Screen.Running, running);
             Set(ref S.Screen.Showing, showing);
         }
-        if (!running) ScreenClosed?.Invoke();
+        if (!running)
+        {
+            EndHandover();
+            ScreenClosed?.Invoke();
+        }
     }
 
     // ---- Commands from the UI ----
@@ -374,16 +444,35 @@ sealed class Wizard
 
     public void StartScreen()
     {
-        int scale; bool colors, input;
-        lock (gate) { scale = S.Settings.Scale; colors = S.Settings.MatchColors; input = S.Settings.UseLaptopInput; }
-        string error = receiver.Start(scale, colors, input);
+        int scale; bool colors, input, macWindow;
+        lock (gate)
+        {
+            scale = S.Settings.Scale; colors = S.Settings.MatchColors; input = S.Settings.UseLaptopInput;
+            macWindow = S.Mac.Reachable && ulong.TryParse(S.Mac.AppVersion, out ulong v) && v >= 4;
+        }
+        // The handover: the Mac gets this window's spot first, then the picture starts and waits
+        // for that window (--after-mac-window). Without it, the picture shows as before.
+        bool handover = macWindow && !receiver.Running && WindowPlace?.Invoke() is { } place && probe.SendWindow(place.Panel, place.DpiPercent);
+        mirroring = handover;
+        if (handover) { lock (gate) mirrorSent = ""; MirrorIfChanged(); }
+        Log.Write("screen: " + (handover ? "the Mac opens this window on its new screen" : "no handover"));
+        string error = receiver.Start(scale, colors, input, handover);
+        if (error != null) EndHandover();
         lock (gate) Set(ref S.Screen.Error, error ?? "");
+    }
+
+    // "Back to Windows": the picture stops; this window is still here, on the same step.
+    public void StopScreen()
+    {
+        EndHandover();
+        receiver.Stop();
     }
 
     public void Finish()
     {
         try { Settings.SetInt("SetupDone", 1); } catch (Exception e) { Log.Write("finish: " + e.Message); }
         lock (gate) Set(ref S.SetupDone, true);
+        EndHandover();  // the picture stays; the setup window goes, on both sides
         Install.StartWatcher();
         Log.Write("finish: setup done");
     }

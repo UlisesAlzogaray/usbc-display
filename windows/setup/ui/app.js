@@ -12,7 +12,12 @@
   // ---------- Theme ----------
   const forced = params.get('theme');
   const mq = window.matchMedia('(prefers-color-scheme: dark)');
-  const setTheme = () => { root.dataset.theme = forced || (mq.matches ? 'dark' : 'light'); };
+  // The same wizard can also run in a window on the Mac's new screen (the handover when the
+  // picture starts, see Mac app setupWindow): there it only shows what the laptop's copy shows,
+  // in the laptop's look, and its clicks go back to the laptop's copy, which acts on them.
+  const mirrored = !!(window.usbcHost && window.usbcHost.mac);
+  if (mirrored) root.classList.add('mac-window');
+  const setTheme = () => { if (!mirrored) root.dataset.theme = forced || (mq.matches ? 'dark' : 'light'); };
   setTheme();
   if (mq.addEventListener) mq.addEventListener('change', () => { setTheme(); });
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -21,10 +26,10 @@
   const DEFAULTS = {
     laptop: { windowsBuild: 0, arch: '', isAdminUser: true, usb4: 'unknown', installed: false, elevation: 'none', firewallOk: false, recoveryTasksOk: false, installError: '', installing: false },
     link: { adapterUp: false, adapterName: '', secondsSincePlug: 0, macFound: false, macV6: '', macV4: '', laptopV4: '' },
-    server: { running: false, url: 'http://usbc.local', fallbackUrl: '', urlReady: false, pageVisited: false, download: { sent: 0, size: 0, done: false }, appNotarized: false },
+    server: { running: false, url: 'http://usbc.local', fallbackUrl: '', urlReady: false, pageVisited: false, download: { sent: 0, size: 0, done: false }, appNotarized: false, pageFocused: true, settingsOpened: false, pageBlurs: 0 },
     mac: {
-      reachable: false, outdated: false, appVersion: '', macOS: '',
-      status: { screenOk: false, axOk: false, screenPrompted: false, axPrompted: false, loginItemEnabled: false, loginItemNeedsApproval: false, sessionActive: false, runningAsAgent: false, inApplications: false, screenNeedsRelaunch: false },
+      reachable: false, outdated: false, appVersion: '', macOS: '', appearance: '', accent: '',
+      status: { screenOk: false, axOk: false, screenPrompted: false, axPrompted: false, loginItemEnabled: false, loginItemNeedsApproval: false, sessionActive: false, runningAsAgent: false, inApplications: false, screenNeedsRelaunch: false, settingsFront: false, promptUp: false },
     },
     screen: { running: false, showing: false, pointerOnLaptop: false, error: '' },
     settings: { scaleOptions: [], scale: 125, matchColors: true, useLaptopInput: true },
@@ -114,6 +119,13 @@
         L.sent.relaunch = false; L.marks.needsRelaunch = 0;
       }
     }
+    // A Mac step asks once, by itself, the moment it opens: the Mac shows its question and this
+    // laptop follows what's on its screen (steps.js permissionView). No button to press first.
+    const ms = S.mac.status;
+    const auto = st.id === 'screen' && !ms.screenOk && !ms.screenNeedsRelaunch ? 'screen'
+      : st.id === 'access' && !ms.axOk && !L.skipAx ? 'accessibility'
+      : st.id === 'login' && ms.loginItemNeedsApproval ? 'loginItems' : '';
+    if (auto && S.mac.reachable && !L.sent[auto] && !L.hold) sendMac(auto);
     if (st.done(S, L) && !L.advanceTimer && st.id !== 'done') {
       // Show the success state for a moment, then go on.
       L.advanceTimer = setTimeout(() => {
@@ -124,8 +136,45 @@
   }
 
   let shownSent = false;
+  function onMessage(msg) {
+    if (msg && msg.type === 'mirror') onMirror(msg);
+    else if (msg && msg.type === 'remoteAct') doAct(msg.act, { dataset: msg.data || {}, disabled: false });
+    else onState(msg);
+  }
+
+  // The Mac's copy: the laptop's state, place and look, drawn as they are. Once drawn, the Mac
+  // app hears "drawn" and the picture may show (it then has this window in it).
+  function onMirror(msg) {
+    S = merge(DEFAULTS, msg.state);
+    Object.assign(L, msg.local || {}, { hold: false });
+    const look = msg.look || {};
+    if (look.theme) root.dataset.theme = look.theme;
+    if (look.style != null && root.getAttribute('style') !== look.style) root.setAttribute('style', look.style);
+    haveState = true;
+    render();
+    if (!shownSent) {
+      shownSent = true;
+      requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => send({ cmd: 'drawn' }), 100)));
+    }
+  }
+
+  // The laptop's copy: where it is, for the Mac's copy while that's up (the host passes it on
+  // only then). Sent when it changes.
+  let mirrorSent = '';
+  function sendMirror() {
+    if (mirrored || !host) return;
+    const local = {};
+    // Not since: the Mac's copy counts the seconds on a step itself, from enteredAt.
+    ['pos', 'started', 'checkSeen', 'sizeSaved', 'skipAx', 'skipFind', 'sent', 'sentAt', 'sentN', 'marks', 'draft', 'enteredAt'].forEach((k) => { local[k] = L[k]; });
+    const j = JSON.stringify({ local, look: { theme: root.dataset.theme, style: root.getAttribute('style') || '' } });
+    if (j === mirrorSent) return;
+    mirrorSent = j;
+    send({ cmd: 'mirror', json: j });
+  }
+
   function onState(msg) {
     if (!msg || msg.type !== 'state') return;
+    if (mirrored) return;  // the Mac's copy draws from the laptop's mirror only
     S = merge(DEFAULTS, msg);
     if (!haveState) {
       haveState = true;
@@ -243,6 +292,7 @@
 
   let sceneKey = '', sceneAnims = [], sceneNow = null;
   function render() {
+    queueMicrotask(sendMirror);  // once this render has updated L
     if (!L.draft && haveState) L.draft = { scale: S.settings.scale, matchColors: S.settings.matchColors, useLaptopInput: S.settings.useLaptopInput };
     if (L.draft && S.settings.scaleOptions.length && !S.settings.scaleOptions.some((o) => o.id === L.draft.scale)) {
       const rec = S.settings.scaleOptions.find((o) => o.recommended) || S.settings.scaleOptions[0];
@@ -316,7 +366,7 @@
     const f = params.get('f');
     let frac = null;
     if (f !== null) frac = Number(f);
-    else if (reduced.matches || params.get('shot')) frac = scene.poster;
+    else if (reduced.matches || params.get('shot') || scene.still) frac = scene.poster;  // still: the handover (steps.js picture)
     if (frac === null) return;
     const dur = (scene.tl && scene.tl.dur) || 1000;
     sceneAnims.forEach((a) => { a.pause(); a.currentTime = frac * dur + (a._shift || 0); });
@@ -383,16 +433,21 @@
       goNext();
     },
     startScreen() { L.sent.startScreen = true; send({ cmd: 'startScreen' }); render(); },
+    stopScreen() { send({ cmd: 'stopScreen' }); },
     finish() { send({ cmd: 'finish' }); },
     close() { send({ cmd: 'close' }); },
     minimize() { send({ cmd: 'minimize' }); },
   };
+  function doAct(act, el) {
+    if (act.startsWith('mac:')) { sendMac(act.slice(4)); render(); return; }
+    if (actions[act]) actions[act](el);
+  }
   document.addEventListener('click', (e) => {
     const el = e.target.closest('[data-act]');
     if (!el || el.disabled) return;
-    const act = el.dataset.act;
-    if (act.startsWith('mac:')) { sendMac(act.slice(4)); render(); return; }
-    if (actions[act]) actions[act](el);
+    // On the Mac's copy every click is the laptop copy's to act on (its data goes along).
+    if (mirrored) { send({ cmd: 'act', act: el.dataset.act, data: Object.assign({}, el.dataset) }); return; }
+    doAct(el.dataset.act, el);
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.target === document.body || e.target === document.documentElement)) {
@@ -405,7 +460,7 @@
   setInterval(() => {
     if (L.hold) return;
     L.since = Math.floor((Date.now() - L.enteredAt) / 1000);
-    if (haveState) { autoAdvance(); render(); }
+    if (haveState) { if (!mirrored) autoAdvance(); render(); }
   }, 1000);
 
   if (window.ResizeObserver) {
@@ -416,7 +471,7 @@
   // ---------- Boot ----------
   render();
   if (host) {
-    host.addEventListener('message', (e) => onState(e.data));
+    host.addEventListener('message', (e) => onMessage(e.data));
     send({ cmd: 'ready' });
   } else {
     root.classList.add('preview');

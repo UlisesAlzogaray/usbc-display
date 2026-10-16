@@ -41,6 +41,15 @@ static unsafe class Program
     static Renderer renderer;
     static Thread presentThread;
     static volatile bool windowShown;
+    // The setup's handover: the Mac opens the setup window, in the same spot, on its new screen;
+    // the picture shows only once a frame with it has been applied ("UCDV" names that frame), so on
+    // this laptop only what's behind the window changes. 6 s at most, whatever happens.
+    static bool afterMacWindow;
+    static volatile uint macWindowSeq, lastAppliedSeq;
+    static long firstFrameAt;
+    static bool MayShow(uint applied) =>
+        !afterMacWindow || (macWindowSeq != 0 && applied >= macWindowSeq) ||
+        (firstFrameAt != 0 && Stopwatch.GetTimestamp() - firstFrameAt > 6 * Stopwatch.Frequency);
 
     static int Main(string[] args)
     {
@@ -54,6 +63,7 @@ static unsafe class Program
             else if (a == "--raw" || a == "--lossless-only") losslessOnly = true;
             else if (a == "--h264") h264 = true;
             else if (a == "--exit-when-unplugged") exitWhenUnplugged = true;
+            else if (a == "--after-mac-window") afterMacWindow = true;  // the setup's handover (see ShowPicture)
             else if (a == "--test-card") testCard = true;
             else if (a == "--test-drag") testCard = testDrag = true;  // the card as a window dragged around
             else if (a == "--video-only") videoOnly = true;  // testing: H.264 only, no lossless refresh
@@ -261,6 +271,7 @@ static unsafe class Program
         // The Mac's pointer images have their own shadow; Windows would add a second one.
         if (show) Win32.HidePointerShadow(); else Win32.RestorePointerShadow();
         Win32.PostMessageW(hwnd, Win32.WM_APP_SHOW, show ? 1 : 0, 0);
+        if (show) Console.WriteLine("Picture on screen.");  // the setup (Receiver.cs) waits for this line
     }
 
     // The renderer (and its present thread) outlives a connection, so a reconnect keeps the
@@ -552,9 +563,14 @@ static unsafe class Program
                 }
                 case Proto.Bye:
                     return true;
+                case Proto.WindowReady:
+                    macWindowSeq = BinaryPrimitives.ReadUInt32LittleEndian(msg.AsSpan(4));
+                    if (!windowShown && MayShow(lastAppliedSeq)) ShowPicture(true);
+                    break;
                 default:
                     throw new InvalidOperationException($"unexpected control message 0x{magic:X8}");
             }
+            if (!windowShown && afterMacWindow && MayShow(lastAppliedSeq)) ShowPicture(true);  // the time limit
 
             long t = Stopwatch.GetTimestamp();
             if (t - lastStats >= (verbose ? 1 : 10) * Stopwatch.Frequency) { PrintStats(t - lastStats); lastStats = t; }
@@ -718,7 +734,9 @@ static unsafe class Program
                     r.Applied(applied, MacNsToQpc(captureNs));
                 }
                 s.Send(Proto.WinMsg(Proto.Ack, seq, (uint)((applied - t0) * 1_000_000 / Stopwatch.Frequency)));
-                if (!windowShown) ShowPicture(true);
+                lastAppliedSeq = seq;
+                if (firstFrameAt == 0) firstFrameAt = applied;
+                if (!windowShown && MayShow(seq)) ShowPicture(true);
 
                 applyStats.Add((applied - t0) * 1000.0 / Stopwatch.Frequency);
                 Interlocked.Increment(ref statFrames);

@@ -47,6 +47,7 @@
       return '<svg class="spinner' + (big ? ' big' : '') + '" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/></svg>';
     },
     status(text) { return h.spin() + '<span>' + text + '</span>'; },
+    statusDone(text) { return '<span class="ok-ic">' + I('check') + '</span><span>' + text + '</span>'; },
     keys(list) { return '<span class="keys">' + list.map((k) => '<span class="key">' + k + '</span>').join('<span class="plus">+</span>') + '</span>'; },
     kbd(list) { return list.map((k) => '<span class="kbd">' + k + '</span>').join(' + '); },
   };
@@ -63,6 +64,17 @@
   const secs = (t) => (t ? (Date.now() - t) / 1000 : 0);
   // When something first happened on this step (cleared when the step changes).
   const mark = (L, k, cond) => { if (cond && !L.marks[k]) L.marks[k] = Date.now(); return cond ? secs(L.marks[k]) : 0; };
+  // A picture of what's on the Mac's screen right now (macos.js), in the Mac's own appearance once
+  // its app has said (Mac app 4 and later), until then in this laptop's.
+  const macScene = (s, name, fallback) => (D.scenes.mac
+    ? D.scenes.mac(name, {
+      dark: s.mac.appearance ? s.mac.appearance === 'dark' : document.documentElement.dataset.theme === 'dark',
+      accent: s.mac.accent || 'blue', host: hostOf(s.server.url) || 'usbc.local', appName: 'USB-C Display',
+    })
+    : fallback());
+  // Live, so it reads as watching the Mac rather than waiting on it.
+  const FOLLOWING = h.status('Following your Mac…');
+  const SHOWING = h.statusDone('Your Mac’s screen is showing on this laptop');
 
   // ---------- Steps ----------
   const steps = [];
@@ -307,7 +319,7 @@
       if (ready) notes.push('Saw a search page instead? Check that it starts with <b>http://</b>.');
       if (alt) notes.push('Still nothing? Type this instead: <b>' + esc(s.server.fallbackUrl) + '</b>');
       return {
-        lane: 'mac', scene: D.scenes.safari(host || 'usbc.local'), stage: 'mid',
+        lane: 'mac', scene: macScene(s, 'safari-type', () => D.scenes.safari(host || 'usbc.local')), stage: 'mid',
         title: outdated ? 'Get the newer app' : 'On your Mac, open Safari',
         lead: (outdated ? 'Your Mac has an older USB-C Display. It can get the new one from this laptop. ' : '') +
           'Click the <b>compass icon</b> in the Dock at the bottom of your Mac’s screen. Click the address bar at the top, type the address below, then press <b>Return</b>.',
@@ -346,35 +358,63 @@
       const waited = Math.max(mark(L, 'done', d.done), d.done && L.hold ? L.since : 0);
       const asks = [FIREWALL_ASK, MOVE_ASK, ['A note: Background Items Added', 'That’s USB-C Display getting ready to start by itself. Nothing to click.']];
       if (!d.sent && !d.done) {
+        v.scene = macScene(s, 'safari-download', () => scene);
         v.title = 'Click Download on your Mac';
         v.lead = 'On the page that opened in Safari, click the blue <b>Download</b> button. If Safari asks to allow downloads, click <b>Allow</b>.';
-        v.status = h.status('Waiting for the download to start…');
+        v.status = FOLLOWING;
       } else if (!d.done) {
+        v.scene = macScene(s, 'safari-download', () => scene);
         v.title = 'Downloading to your Mac';
         v.lead = 'Your Mac is getting the app from this laptop, through the cable.';
         v.below = prog;
         v.status = h.status('Downloading…');
       } else if (nz) {
+        v.scene = macScene(s, 'safari-open', () => scene);
         v.title = 'Open the app on your Mac';
         v.lead = 'In Safari, click the <b>download arrow</b> at the top right, then double-click <b>USB-C Display</b>. When your Mac asks if you’re sure, click <b>Open</b>. ' +
           'It then moves itself to Applications.';
         v.stage = 'short';
         v.below = h.ifAsks(asks);
-        v.status = h.status('Waiting for the app to open on your Mac…');
+        v.status = FOLLOWING;
       } else {
-        v.title = 'Open the app on your Mac';
-        v.lead = 'Your Mac will say it can’t check this app for malware. That’s only because it isn’t registered with Apple. Follow these steps. The app then moves itself to Applications.';
-        v.sub = h.subs([
-          ['Open the app', 'Click the <b>download arrow</b> at the top right of Safari, then double-click <b>USB-C Display</b>.'],
-          ['Done', 'Your Mac says it can’t check the app. Click <b>Done</b>, not Move to Trash.'],
-          ['Privacy &amp; Security', 'Click the gray gear in the Dock (<b>System Settings</b>), then <b>Privacy &amp; Security</b>. Scroll to the bottom.'],
-          ['Open Anyway', 'Click <b>Open Anyway</b>. In the box that comes back, click <b>Open Anyway</b> again.'],
-          ['Password', 'Type your Mac’s <b>password</b> and click <b>OK</b>.'],
-        ]);
-        v.aside += waited > 60
-          ? h.card('Don’t see Open Anyway?', 'info', '<p>It only shows for about an hour. Double-click the app again, click <b>Done</b>, then look again.</p>')
+        // Not notarized: Gatekeeper stops the first open. The app isn't running yet, but the page
+        // in Safari is ours: it says when Safari loses focus (Gatekeeper's box takes it) and comes
+        // back, and when its Open Privacy & Security button is clicked. The laptop follows that.
+        const sv = s.server;
+        const left = sv.pageBlurs > 0;  // counted since the download finished (Wizard.OnDownload)
+        const opened = mark(L, 'settings', sv.settingsOpened);
+        let name, title, lead;
+        if (sv.settingsOpened) {
+          // Safari asks to open System Settings, then three boxes we can't see from here: show
+          // them in turn, a few seconds each, in the order they come.
+          const seq = [['safari-allow', 'Click <b>Allow</b>', 'Safari asks to open System Settings. Click <b>Allow</b>.'],
+            ['gk-settings', 'Click <b>Open Anyway</b>', 'System Settings opens at the right place. Next to “USB-C Display.app” was blocked, click <b>Open Anyway</b>.'],
+            ['gk-confirm', 'Click <b>Open Anyway</b> again', 'Your Mac asks once more. Click <b>Open Anyway</b>.'],
+            ['password', 'Type your password', 'Use Touch ID or type your Mac’s <b>password</b>, then click OK. The app opens and moves itself to Applications.']];
+          const i = opened < 4 ? 0 : 1 + (Math.floor((opened - 4) / 5) % 3);
+          [name, title, lead] = seq[i];
+          title = title.replace(/<\/?b>/g, '') + ' on your Mac';
+          v.sub = h.subs(seq.map((x) => [x[1].replace(/<\/?b>/g, ''), x[2]]));
+        } else if (left && !sv.pageFocused) {
+          name = 'gk-notopened';
+          title = 'Click Done on your Mac';
+          lead = 'Your Mac says it can’t check the app, only because it isn’t registered with Apple yet. Click <b>Done</b>. Not Move to Trash, even though it’s the highlighted button.';
+        } else if (left) {
+          name = 'safari-settings';
+          title = 'Click Open Privacy & Security';
+          lead = 'Back in Safari, the page now has a button: <b>Open Privacy &amp; Security</b>. Click it. It opens exactly where you allow the app.';
+        } else {
+          name = 'safari-open';
+          title = 'Open the app on your Mac';
+          lead = 'In Safari, click the <b>download arrow</b> at the top right, then double-click <b>USB-C Display</b>. Your Mac will say it can’t check it. That’s expected.';
+        }
+        v.scene = macScene(s, name, () => scene);
+        v.title = title;
+        v.lead = lead;
+        v.aside += waited > 90 && !sv.settingsOpened
+          ? h.card('Don’t see the button?', 'info', '<p>In Safari, scroll the USB-C Display page down a little. Or open <b>System Settings › Privacy &amp; Security</b> and scroll to the bottom.</p>')
           : h.ifAsks(asks.slice(0, 2));
-        v.status = h.status('Waiting for the app to open on your Mac…');
+        v.status = FOLLOWING;
       }
       return v;
     },
@@ -424,7 +464,7 @@
     render(s, L) {
       const off = s.mac.status.loginItemNeedsApproval;
       const v = {
-        lane: 'mac', scene: D.scenes.login(off),
+        lane: 'mac', scene: macScene(s, 'bg-items', () => D.scenes.login(off)),
         title: 'Let it start by itself',
         lead: 'So your Mac is ready whenever you plug in the cable. Your Mac may have shown a note called <b>Background Items Added</b>. That was us. There’s nothing to click.',
         aside: h.why({
@@ -437,16 +477,17 @@
         secondary: L.since > 20 ? [{ label: 'Open Login Items on my Mac', act: 'mac:loginItems' }] : [],
       };
       if (off) {
-        const sent = L.sent.loginItems;
-        v.lane = sent ? 'mac' : 'pc';
+        // Switched off in Login Items: the Mac opens that page by itself (app.js autoAdvance).
+        const front = s.mac.status.settingsFront;
+        v.scene = macScene(s, 'login-list', () => D.scenes.login(off));
         v.title = 'Turn it back on in Login Items';
-        v.lead = sent
-          ? 'Look at your Mac. Under <b>Allow in the Background</b>, turn on the switch next to <b>USB-C Display</b>.'
-          : 'USB-C Display was switched off on your Mac. Click <b>Open Login Items on my Mac</b> below, then turn on the switch next to <b>USB-C Display</b>.';
+        v.lead = front
+          ? 'In System Settings on your Mac, under <b>Background App Activity</b>, turn on the switch next to <b>USB-C Display</b>.'
+          : 'USB-C Display is switched off on your Mac. Click <b>Show it on my Mac</b>, then turn on its switch under <b>Background App Activity</b>.';
         v.below = h.info('caution', '<b>It’s switched off on your Mac.</b> While it’s off, your Mac can’t get ready by itself.');
-        v.primary = { label: sent ? 'Open it again on my Mac' : 'Open Login Items on my Mac', act: 'mac:loginItems' };
+        v.primary = front ? null : { label: 'Show it on my Mac', act: 'mac:loginItems' };
         v.secondary = [];
-        v.status = sent ? h.status('Waiting for the switch on your Mac…') : '';
+        v.status = FOLLOWING;
       }
       return v;
     },
@@ -466,68 +507,67 @@
       if (st.screenNeedsRelaunch || L.sent.relaunch) {
         const late = L.sentAt.relaunch && secs(L.sentAt.relaunch) > 25;
         return {
-          lane: 'pc', scene: D.scenes.waiting('Restarting USB-C Display on your Mac'),
-          title: 'Restarting on your Mac',
-          lead: 'USB-C Display restarts so your Mac can use the new permission. Nothing to do. If your Mac shows <b>Quit &amp; Reopen</b>, you can click it.',
+          lane: 'mac', scene: macScene(s, 'screen-reopen', () => D.scenes.waiting('Restarting USB-C Display on your Mac')),
+          title: 'Click Quit & Reopen on your Mac',
+          lead: 'Your Mac restarts USB-C Display so it can use the permission. Click <b>Quit &amp; Reopen</b>, or just wait: it restarts by itself in a few seconds.',
           aside: why,
           status: h.status('Restarting. This takes about 10 seconds…'),
           primary: late ? { label: 'Restart it on my Mac', act: 'mac:relaunch' } : null,
         };
       }
-      // The Mac shows its own question only once. After that the button
-      // opens the settings pane straight away.
-      if (!('screenPre' in L.marks)) L.marks.screenPre = st.screenPrompted;
-      const direct = L.marks.screenPre || (L.sentN.screen || 0) > 1;
-      const sent = L.sent.screen;
-      const subs = [
-        ['Open Settings', 'Your Mac asks to record the screen. Click <b>Open System Settings</b>.'],
-        ['Switch on', 'Turn on the switch next to <b>USB-C Display</b>.'],
-        ['Password', 'Use Touch ID or type your Mac’s <b>password</b>.'],
-        ['Quit &amp; Reopen', 'If your Mac asks, click <b>Quit &amp; Reopen</b>. It restarts by itself otherwise.'],
-      ];
-      return {
-        lane: sent ? 'mac' : 'pc', scene: D.scenes.screen(direct),
-        title: 'Let your Mac share its picture',
-        lead: sent
-          ? 'Look at your Mac and turn on the switch next to <b>USB-C Display</b>. Clicked Deny? Click <b>Open it again on my Mac</b>.'
-          : 'Your Mac will say USB-C Display wants to <b>record your screen</b>. That’s just Apple’s name for it. Nothing is recorded or saved. Click <b>Open it on my Mac</b> below.',
-        sub: h.subs(direct ? subs.slice(1) : subs),
-        aside: why,
-        status: sent ? h.status('Waiting for the switch on your Mac…') : '',
-        primary: { label: sent ? 'Open it again on my Mac' : 'Open it on my Mac', act: 'mac:screen' },
-      };
+      // The Mac asks by itself as this step opens (app.js autoAdvance); from then on this shows
+      // whatever the Mac shows: its question, then the list in System Settings.
+      return permissionView(s, L, {
+        action: 'screen', prompt: 'screen-prompt', list: 'screen-list', why,
+        old: (direct) => D.scenes.screen(direct),
+        asking: ['Your Mac is asking to share its screen', 'Click <b>Open System Settings</b> on your Mac. macOS says “record this computer’s screen and audio”. That’s Apple’s name for it: it’s how the picture reaches this laptop. Nothing is saved, and no sound.'],
+        listing: ['Turn on USB-C Display', 'In <b>Screen &amp; System Audio Recording</b> on your Mac, turn on the switch next to <b>USB-C Display</b>. Your Mac then asks for Touch ID or your password.'],
+      });
     },
   });
+
+  // One permission step, following the Mac: its question (a macOS prompt) while that's up, the
+  // list in System Settings while that's in front, otherwise a way to show the question again.
+  function permissionView(s, L, o) {
+    const st = s.mac.status;
+    const sent = L.sent[o.action], since = secs(L.sentAt[o.action]);
+    let name, title, lead, primary = null;
+    if (st.promptUp) [name, [title, lead]] = [o.prompt, o.asking];
+    else if (st.settingsFront) [name, [title, lead]] = [o.list, o.listing];
+    else if (sent && since > 3) {
+      name = o.prompt;
+      title = 'Your Mac’s question was closed';
+      lead = 'No problem, it happens. Click <b>Show it again on my Mac</b>.';
+      primary = { label: 'Show it again on my Mac', act: 'mac:' + o.action };
+    } else {
+      name = o.prompt;
+      title = 'Asking your Mac…';
+      lead = 'Look at your Mac: a question from macOS is about to appear.';
+    }
+    return {
+      lane: 'mac', scene: macScene(s, name, () => o.old(name === o.list)),
+      title, lead, aside: o.why, status: FOLLOWING, primary,
+      secondary: o.secondary || [],
+    };
+  }
 
   add({
     id: 'access', lane: 'mac', rail: 'Laptop keyboard',
     done: (s, L) => s.mac.status.axOk || L.skipAx,
     render(s, L) {
-      if (!('axPre' in L.marks)) L.marks.axPre = s.mac.status.axPrompted;
-      const direct = L.marks.axPre || (L.sentN.accessibility || 0) > 1;
-      const sent = L.sent.accessibility;
-      const subs = [
-        ['Open Settings', 'Your Mac asks to control this computer. Click <b>Open System Settings</b>.'],
-        ['Switch on', 'Turn on the switch next to <b>USB-C Display</b>.'],
-        ['Password', 'Use Touch ID or type your Mac’s <b>password</b>.'],
-      ];
-      return {
-        lane: sent ? 'mac' : 'pc', scene: D.scenes.access(direct),
-        title: 'Use this laptop’s trackpad and keyboard',
-        lead: sent
-          ? 'Look at your Mac and turn on the switch next to <b>USB-C Display</b>. Clicked Deny? Click <b>Open it again on my Mac</b>.'
-          : 'Optional. Your Mac will say USB-C Display wants to <b>control this computer</b>. It only follows what you do on this laptop. Click <b>Open it on my Mac</b> below, or Skip.',
-        sub: h.subs(direct ? subs.slice(1) : subs),
-        aside: h.why({
+      return permissionView(s, L, {
+        action: 'accessibility', prompt: 'ax-prompt', list: 'ax-list',
+        old: (direct) => D.scenes.access(direct),
+        asking: ['Your Mac is asking about this laptop’s trackpad and keyboard', 'Click <b>Open System Settings</b> on your Mac. macOS says “control this Mac and access your data”: that’s what lets this laptop’s trackpad and keyboard move the pointer and type. It only follows what you do here.'],
+        listing: ['Turn on USB-C Display', 'In <b>Device Control and Data Access</b> on your Mac, turn on the switch next to <b>USB-C Display</b>. Your Mac then asks for Touch ID or your password.'],
+        secondary: [{ label: 'Skip', act: 'skipAx' }],
+        why: h.why({
           allows: 'This laptop’s trackpad and keyboard can move your Mac’s pointer and type.',
-          why: 'macOS calls this Accessibility. Apps need it to move the pointer.',
+          why: 'macOS calls this Device Control and Data Access (Accessibility before macOS 27). Apps need it to move the pointer.',
           without: 'Everything else still works. You’ll use your Mac’s own mouse and keyboard.',
           never: ['Only what you do on this laptop’s trackpad and keyboard.', 'Nothing is recorded or sent anywhere else.', 'Turn it off anytime in <b>Privacy &amp; Security</b>.'],
         }),
-        status: sent ? h.status('Waiting for the switch on your Mac…') : '',
-        secondary: [{ label: 'Skip', act: 'skipAx' }],
-        primary: { label: sent ? 'Open it again on my Mac' : 'Open it on my Mac', act: 'mac:accessibility' },
-      };
+      });
     },
   });
 
@@ -560,14 +600,19 @@
     render(s, L) {
       const err = s.screen.error;
       const starting = (L.sent.startScreen || s.screen.running) && !s.screen.showing && !err;
+      // From the click on, nothing here moves: the Mac draws this same window on its new screen,
+      // the picture shows when both copies look the same (the handover), and it stays still
+      // until the next step, so nothing jumps right after the cut.
+      const scene = D.scenes.picture();
+      if ((L.sent.startScreen || s.screen.running) && !err) { scene.poster = 0.5; scene.still = true; scene.key += '-still'; }
       return {
-        lane: 'pc', scene: D.scenes.picture(),
+        lane: 'pc', scene,
         title: 'Ready for the first picture',
-        lead: 'This laptop is about to show your Mac’s extra screen, and this window steps aside. Here’s what to do:',
+        lead: 'This laptop is about to become your Mac’s extra screen. This window stays right where it is: only what’s behind it changes, from Windows to your Mac.',
         sub: h.subs([
-          ['Show it', 'Click <b>Show my Mac’s screen</b>. At first you see just your Mac’s wallpaper. That’s normal.'],
-          ['Slide the pointer', 'On your Mac, slide the pointer off the <b>right edge</b>. It shows up on this laptop.'],
-          ['Come back', 'Press ' + h.kbd(['Ctrl', 'Alt', 'Esc']) + ' to come back here and finish.'],
+          ['Show it', 'Click <b>Show my Mac’s screen</b>.'],
+          ['Look around', 'This window is now on your Mac. Move windows over from your Mac’s own screen.'],
+          ['Windows back', 'Anytime, press ' + h.kbd(['Ctrl', 'Alt', 'Esc']) + '.'],
         ]),
         below: err ? h.info('critical', '<b>The picture didn’t start.</b> ' + esc(err)) : '',
         aside: h.card('Remember this', 'keyboard', '<div class="keycard">' + h.keys(['Ctrl', 'Alt', 'Esc']) + '</div><p>Press these together anytime to get <b>Windows</b> back on this laptop.</p>', 'keys-card') +
@@ -575,8 +620,9 @@
             ['check', 'Your Mac’s screen flickers once as it adds the new screen.'],
             ['check', 'This laptop shows your Mac’s extra screen, full size.'],
           ])),
-        status: starting ? h.status('Starting. The picture appears in a few seconds…') : '',
-        primary: starting ? null : { label: err ? 'Try again' : 'Show my Mac’s screen', act: 'startScreen' },
+        // Showing: this step moves on in a moment; the button doesn't come back meanwhile.
+        status: s.screen.showing ? SHOWING : starting ? h.status('Starting. The picture appears in a few seconds…') : '',
+        primary: starting || s.screen.showing ? null : { label: err ? 'Try again' : 'Show my Mac’s screen', act: 'startScreen' },
       };
     },
   });
@@ -591,12 +637,12 @@
       const aside = h.card('Not on the right?', 'pointer', '<p>Your Mac may have put the new screen on the left. Try the other edge.</p><p>You can move it later in <b>System Settings › Displays</b> on your Mac.</p>');
       if (s.screen.showing) {
         return {
-          lane: 'mac', scene: D.scenes.find(),
-          title: 'Find your new screen',
-          lead: 'On your Mac, slide the pointer off the <b>right edge</b>. It shows up on this laptop. When you’re done, press ' + h.kbd(['Ctrl', 'Alt', 'Esc']) + ' to come back here.',
+          lane: 'mac', scene: macScene(s, 'displays', () => D.scenes.find()),
+          title: 'This is your Mac now',
+          lead: 'This laptop is your Mac’s second screen, and this window is on it. Slide your Mac’s pointer off the edge of its own screen to come here, and move windows across.',
           aside,
-          status: h.status('Your Mac’s screen is showing on this laptop'),
-          primary: { label: 'It worked', act: 'skipFind' },
+          status: SHOWING,
+          primary: { label: 'It works', act: 'skipFind' },
         };
       }
       const again = L.sent.startScreen && s.screen.running;
@@ -615,9 +661,12 @@
   add({
     id: 'done', lane: 'pc', rail: 'All set',
     done: () => false,
-    render() {
+    render(s) {
       const row = (ic, b, t) => '<div class="row"><span class="ico">' + I(ic) + '</span><div><b>' + b + '</b><span>' + t + '</span></div></div>';
       return {
+        // Seen on the Mac's new screen: Finish keeps the picture; Back to Windows ends it, and
+        // this same window is there on the laptop again.
+        secondary: s.screen.showing ? [{ label: 'Back to Windows', act: 'stopScreen' }] : [],
         lane: 'both', stage: 'fill', scene: D.scenes.hero('done'),
         title: 'All set', ok: true,
         lead: 'This laptop is now a second screen for your Mac.',

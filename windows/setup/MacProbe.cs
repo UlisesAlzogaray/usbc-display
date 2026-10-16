@@ -50,6 +50,41 @@ sealed class MacProbe
         }
     }
 
+    // The handover when the picture starts: where this setup's window is on the laptop's panel
+    // (pixels) and its DPI, so the Mac opens the same window in the same spot; an empty rectangle
+    // closes it. False when the Mac app isn't connected.
+    public bool SendWindow(System.Drawing.Rectangle r, int dpiPercent)
+    {
+        lock (sendLock)
+        {
+            var s = current;
+            if (s == null) return false;
+            try
+            {
+                s.Send(Proto.WinMsg(Proto.SetupWindow, (uint)(ushort)(short)r.X | (uint)(ushort)(short)r.Y << 16,
+                                    (uint)(ushort)r.Width | (uint)(ushort)r.Height << 16, (uint)dpiPercent));
+                return true;
+            }
+            catch { return false; }
+        }
+    }
+
+    // The wizard's state and place for the Mac's copy of the window, as JSON.
+    public void SendMirror(byte[] json)
+    {
+        lock (sendLock)
+        {
+            var s = current;
+            if (s == null) return;
+            try
+            {
+                s.Send(Proto.WinMsg(Proto.Mirror, (uint)json.Length));
+                s.Send(json);
+            }
+            catch { }
+        }
+    }
+
     bool Send(Socket s)
     {
         // Called with sendLock held.
@@ -97,7 +132,17 @@ sealed class MacProbe
                     while (target != null && Equals(target, mac))
                     {
                         Proto.ReadExactly(s, msg);
-                        if (BinaryPrimitives.ReadUInt32LittleEndian(msg) != Proto.Info) continue;  // nothing else is expected here
+                        uint magic = BinaryPrimitives.ReadUInt32LittleEndian(msg);
+                        if (magic == Proto.Click)  // a click in the Mac's copy of the setup window
+                        {
+                            uint len = BinaryPrimitives.ReadUInt32LittleEndian(msg.AsSpan(4));
+                            if (len > 65536) break;
+                            var body = new byte[len];
+                            Proto.ReadExactly(s, body);
+                            wizard.OnRemoteClick(System.Text.Encoding.UTF8.GetString(body));
+                            continue;
+                        }
+                        if (magic != Proto.Info) continue;  // nothing else is expected here
                         answered = true;
                         wizard.OnMacInfo(Parse(msg));
                     }
@@ -122,7 +167,7 @@ sealed class MacProbe
 
     public sealed class Info
     {
-        public uint Status, Refuse;
+        public uint Status, Refuse, Accent;  // Accent: AppleAccentColor + 2, 0 multicolour (Mac app 4)
         public ulong AppVersion;
         public int Protocol;
         public string MacOS = "";
@@ -140,6 +185,7 @@ sealed class MacProbe
             Protocol = (int)(version & 0xFFFF),
             MacOS = major == 0 ? "" : patch == 0 ? $"{major}.{minor}" : $"{major}.{minor}.{patch}",
             Refuse = BinaryPrimitives.ReadUInt32LittleEndian(m.AsSpan(24)),
+            Accent = BinaryPrimitives.ReadUInt32LittleEndian(m.AsSpan(28)),
         };
     }
 }

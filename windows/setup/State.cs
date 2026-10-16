@@ -56,6 +56,11 @@ sealed class ServerState
     public bool UrlReady, PageVisited;
     public DownloadState Download = new();
     public bool AppNotarized;
+    // From the page in Safari: whether Safari is in front (it isn't while Gatekeeper's dialog or
+    // System Settings is), how many times it left since the download finished, and whether its
+    // settings button was clicked.
+    public bool PageFocused = true, SettingsOpened;
+    public int PageBlurs;
 }
 
 sealed class DownloadState
@@ -69,12 +74,16 @@ sealed class MacState
     public bool Reachable, Outdated;
     public string AppVersion = "", MacOS = "";
     public MacStatus Status = new();
+    // The Mac's look, so the setup's pictures of it match: "dark"/"light", and the accent colour
+    // ("purple", "blue"... "multicolor"). Empty until a Mac app 4 or later answers.
+    public string Appearance = "", Accent = "";
 }
 
 sealed class MacStatus
 {
     public bool ScreenOk, AxOk, ScreenPrompted, AxPrompted, LoginItemEnabled, LoginItemNeedsApproval,
-                SessionActive, RunningAsAgent, InApplications, ScreenNeedsRelaunch;
+                SessionActive, RunningAsAgent, InApplications, ScreenNeedsRelaunch,
+                SettingsFront, PromptUp;  // System Settings in front, a macOS permission prompt up
 }
 
 sealed class ScreenState

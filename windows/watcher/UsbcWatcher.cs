@@ -130,7 +130,9 @@ static class Watcher
             tray.ShowBalloonTip(15000, "USB-C Display", "To use this laptop's trackpad and keyboard on the Mac, turn on usbc-display " +
                 "on the Mac under System Settings > Privacy & Security > Accessibility.", ToolTipIcon.Info);
         }
-        if (ReceiverRunning && !showing && !warned && DateTime.UtcNow - receiverStarted > TimeSpan.FromSeconds(20))
+        // Only for a receiver started here: one the setup started is the setup's to watch (this
+        // never sees its output, so it would always look stuck).
+        if (receiver != null && !receiver.HasExited && !showing && !warned && DateTime.UtcNow - receiverStarted > TimeSpan.FromSeconds(20))
         {
             warned = true;
             tray.ShowBalloonTip(10000, "USB-C Display", "Can't reach the Mac yet. Check that USB-C Display is running on the Mac " +

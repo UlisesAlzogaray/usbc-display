@@ -94,6 +94,16 @@
     'screen': { step: 'screen' },
     'screen-asked': { step: 'screen', f: (s) => { s.mac.status.screenPrompted = true; } },
     'screen-sent': { step: 'screen', sent: 'screen' },
+    // Following the Mac (Mac app 4): its prompt up, System Settings in front, the prompt closed.
+    'screen-prompt-up': { step: 'screen', sent: 'screen', f: (s) => { s.mac.status.screenPrompted = true; s.mac.status.promptUp = true; } },
+    'screen-settings': { step: 'screen', sent: 'screen', f: (s) => { s.mac.status.screenPrompted = true; s.mac.status.settingsFront = true; } },
+    'screen-closed': { step: 'screen', sent: 'screen', sentAgo: 10, f: (s) => { s.mac.status.screenPrompted = true; } },
+    'access-prompt-up': { step: 'access', sent: 'accessibility', f: (s) => { s.mac.status.axPrompted = true; s.mac.status.promptUp = true; } },
+    'access-settings': { step: 'access', sent: 'accessibility', f: (s) => { s.mac.status.axPrompted = true; s.mac.status.settingsFront = true; } },
+    // Gatekeeper, followed through the page in Safari: Safari left (the box), back, button clicked.
+    'gk-box': { step: 'download', f: (s) => { s.server.download = { sent: 8388608, size: 8388608, done: true }; s.server.appNotarized = false; s.server.pageBlurs = 1; s.server.pageFocused = false; } },
+    'gk-back': { step: 'download', f: (s) => { s.server.download = { sent: 8388608, size: 8388608, done: true }; s.server.appNotarized = false; s.server.pageBlurs = 1; s.server.pageFocused = true; } },
+    'gk-settings': { step: 'download', since: 6, f: (s) => { s.server.download = { sent: 8388608, size: 8388608, done: true }; s.server.appNotarized = false; s.server.pageBlurs = 2; s.server.pageFocused = false; s.server.settingsOpened = true; } },
     'screen-relaunch': { step: 'screen', f: (s) => { s.mac.status.screenPrompted = true; s.mac.status.screenNeedsRelaunch = true; } },
     'relaunch-late': { step: 'screen', sent: 'relaunch', sentAgo: 30, f: (s) => { s.mac.status.screenPrompted = true; s.mac.status.screenNeedsRelaunch = true; } },
     'access': { step: 'access' },

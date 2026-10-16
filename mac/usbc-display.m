@@ -24,6 +24,7 @@
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #import <Accelerate/Accelerate.h>
 #import <ColorSync/ColorSync.h>
+#import <WebKit/WebKit.h>
 #import <ApplicationServices/ApplicationServices.h>
 #import <ServiceManagement/ServiceManagement.h>
 #include <compression.h>
@@ -123,10 +124,13 @@ enum { HELLO_CAN_H264 = 1, HELLO_TEST_CARD = 2,
 // sends it again whenever a bit changes. More QUERYs on the same connection run more actions.
 #define MAGIC_QUERY  0x51444355u // "UCDQ"
 #define MAGIC_STATUS 0x49444355u // "UCDI"
-#define APP_VERSION 3            // the app's build number; build.sh copies it into Info.plist
+#define APP_VERSION 4            // the app's build number; build.sh copies it into Info.plist
 enum { ST_SCREEN_OK = 1, ST_AX_OK = 2, ST_SCREEN_PROMPTED = 4, ST_AX_PROMPTED = 8,
        ST_LOGIN_ITEM_ENABLED = 16, ST_LOGIN_ITEM_NEEDS_APPROVAL = 32, ST_SESSION_ACTIVE = 64,
-       ST_RUNNING_AS_AGENT = 128, ST_IN_APPLICATIONS = 256, ST_SCREEN_NEEDS_RELAUNCH = 512 };
+       ST_RUNNING_AS_AGENT = 128, ST_IN_APPLICATIONS = 256, ST_SCREEN_NEEDS_RELAUNCH = 512,
+       // What's on the Mac's screen now, so the laptop can show the same: System Settings in
+       // front, a macOS permission prompt up, and the Mac's appearance for its pictures of it.
+       ST_SETTINGS_FRONT = 1024, ST_PROMPT_UP = 2048, ST_MAC_DARK = 4096 };
 enum { ACT_SCREEN = 1, ACT_ACCESSIBILITY = 2, ACT_LOGIN_ITEMS = 4, ACT_RELAUNCH = 8, ACT_MOVE = 16 };
 enum { REFUSE_NONE = 0, REFUSE_NO_SCREEN_RECORDING = 1 };
 enum { FRAME_HAS_H264 = 1 };     // FrameHeader.flags
@@ -139,8 +143,9 @@ typedef struct { uint32_t magic, a, b, c; } WinMsg;  // ACK {seq, receiverMicros
 typedef struct { uint32_t magic, a; uint64_t b, c; uint8_t pad[8]; } CtlMsg;  // WELCOME {token}, BEAT {seq, macNs}, TIME {seq, winNs, macNs}, BYE {reason}
 typedef struct { uint32_t magic; int16_t x, y; uint16_t visible, reserved; uint64_t pollNs; uint8_t pad[12]; } MouseMsg;
 typedef struct { uint32_t magic; uint16_t w, h, hotX, hotY; uint32_t dataBytes; uint8_t pad[16]; } ShapeMsg;
-// STATUS: version = APP_VERSION << 16 | PROTOCOL_VERSION; macOS = major << 32 | minor << 16 | patch.
-typedef struct { uint32_t magic, status; uint64_t version, macOS; uint32_t refuse, zero; } StatusMsg;
+// STATUS: version = APP_VERSION << 16 | PROTOCOL_VERSION; macOS = major << 32 | minor << 16 | patch;
+// accent = the Mac's accent colour, AppleAccentColor + 2 (1 graphite ... 8 pink), 0 multicolour.
+typedef struct { uint32_t magic, status; uint64_t version, macOS; uint32_t refuse, accent; } StatusMsg;
 #pragma pack(pop)
 _Static_assert(sizeof(Hello) == 24 && sizeof(FrameHeader) == 32 && sizeof(WinMsg) == 16, "wire sizes");
 _Static_assert(sizeof(CtlMsg) == 32 && sizeof(MouseMsg) == 32 && sizeof(ShapeMsg) == 32, "control messages are 32 bytes");
@@ -188,6 +193,7 @@ static uint64_t gDumpSentAt;  // test card: when to save the picture as sent
 static uint8_t *gSent, *gMsg;
 static size_t gMsgCap;
 static int gW, gH;
+static volatile uint32_t gLastSentSeq;  // the last frame sent: the setup window handover names it
 // Per tile row: the rects it produced (built in parallel, then joined into gMsg).
 typedef struct { uint8_t *buf, *stage, *scratch; size_t len; uint32_t rects; } RowOut;
 static RowOut *gRows;
@@ -956,6 +962,7 @@ static void *senderThread(void *arg) {
         }
         pthread_mutex_unlock(&gLock);
         if (!linkSend(gFrm, gMsg, len)) { endSession(); break; }
+        gLastSentSeq = seq;
         pthread_mutex_lock(&gLock);
         gStatFrames++;
         gStatBytes += len;
@@ -1025,7 +1032,7 @@ static BOOL inputAllowed(void) {
         gTrustPrompted = YES;  // opens System Settings at the right place, once per run
         NSDictionary *o = @{ (__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES };
         AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)o);
-        printf("The laptop's trackpad and keyboard need usbc-display allowed under Privacy & Security > Accessibility.\n");
+        printf("The laptop's trackpad and keyboard need usbc-display allowed under Privacy & Security > Accessibility (Device Control and Data Access on macOS 27).\n");
     }
     noteTrust(ok);
     return ok;
@@ -1551,8 +1558,42 @@ static BOOL applyPanelProfile(CGDirectDisplayID did, CFDataRef icc) {
                             (__bridge NSString *)kColorSyncProfileUserScope: (__bridge NSString *)kCFPreferencesCurrentUser };
     bool ok = ColorSyncDeviceSetCustomProfiles(kColorSyncDisplayDeviceClass, uuid, (__bridge CFDictionaryRef)info);
     CFRelease(uuid);
-    printf("%s the laptop panel's colour profile %s.\n", ok ? "Applied" : "Could not apply", icc ? "" : "(removed)");
+    printf("%s the laptop panel's colour profile.\n", icc ? (ok ? "Applied" : "Could not apply") : (ok ? "Took off" : "Could not take off"));
     return ok && icc;
+}
+
+// The session's colour state (main thread). While the setup's window is on this display the
+// panel's profile waits: the laptop's copy of that window isn't colour-managed (Windows), so
+// managed here its colours would jump at the handover (measured: the icon's #5D83F9 became
+// #8D64FA). Uncorrected, macOS hands over the same sRGB values the laptop showed; the profile
+// comes on when the window closes.
+static CGDirectDisplayID gColourDisplay;
+static CFDataRef gColourProfile;          // retained; NULL: no profile (or no session)
+static SCStream *gColourStream;
+static SCStreamConfiguration *gColourCfg;
+static CFStringRef gColourNative;         // the capture's own colour space (no conversion)
+static BOOL gColourHeld;
+
+static void captureSpace(BOOL managed) {
+    if (!gColourStream || !gColourCfg) return;
+    gColourCfg.colorSpaceName = managed ? gColourNative : kCGColorSpaceSRGB;
+    [gColourStream updateConfiguration:gColourCfg completionHandler:^(NSError *e) {
+        if (e) printf("Could not switch the capture's colours: %s\n", e.localizedDescription.UTF8String);
+    }];
+}
+
+static void holdPanelColour(void) {
+    if (!gColourProfile || gColourHeld) return;
+    gColourHeld = YES;
+    applyPanelProfile(gColourDisplay, NULL);
+    captureSpace(NO);
+    printf("The colour profile waits while the setup window is on this screen.\n");
+}
+
+static void releasePanelColour(void) {
+    if (!gColourProfile || !gColourHeld) return;
+    gColourHeld = NO;
+    if (applyPanelProfile(gColourDisplay, gColourProfile)) captureSpace(YES);
 }
 
 static void logStats(double secs) {
@@ -1705,31 +1746,58 @@ static uint32_t loginItemBits(void) {
     return mine || [NSFileManager.defaultManager fileExistsAtPath:legacyAgentPlist()] ? ST_LOGIN_ITEM_ENABLED : 0;
 }
 
+// What's on the Mac's screen right now. Which app owns each window is visible without Screen
+// Recording (window titles aren't): macOS 27 shows both permission prompts (Screen Recording,
+// Device Control and Data Access) as windows of universalAccessAuthWarn.
+static uint32_t screenBits(void) {
+    uint32_t bits = 0;
+    if ([NSWorkspace.sharedWorkspace.frontmostApplication.bundleIdentifier isEqualToString:@"com.apple.systempreferences"])
+        bits |= ST_SETTINGS_FRONT;
+    CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
+    if (list) {
+        for (NSDictionary *w in (__bridge NSArray *)list)
+            if ([w[(__bridge NSString *)kCGWindowOwnerName] isEqualToString:@"universalAccessAuthWarn"]) { bits |= ST_PROMPT_UP; break; }
+        CFRelease(list);
+    }
+    if ([[NSUserDefaults.standardUserDefaults stringForKey:@"AppleInterfaceStyle"] isEqualToString:@"Dark"]) bits |= ST_MAC_DARK;
+    return bits;
+}
+
 static uint32_t currentStatus(void) {
     BOOL screen = gBench || CGPreflightScreenCaptureAccess();
     return (screen ? ST_SCREEN_OK : 0) | (AXIsProcessTrusted() ? ST_AX_OK : 0) |
            (gScreenPrompted ? ST_SCREEN_PROMPTED : 0) | (gTrustPrompted ? ST_AX_PROMPTED : 0) |
            loginItemBits() | (gConnected ? ST_SESSION_ACTIVE : 0) | (gAgent ? ST_RUNNING_AS_AGENT : 0) |
            (inApplications() ? ST_IN_APPLICATIONS : 0) |
-           (!screen && screenAllowedForNewProcess(NO) == 1 ? ST_SCREEN_NEEDS_RELAUNCH : 0);
+           (!screen && screenAllowedForNewProcess(NO) == 1 ? ST_SCREEN_NEEDS_RELAUNCH : 0) |
+           screenBits();
 }
+
+static uint32_t accentCode(void) {
+    id accent = [NSUserDefaults.standardUserDefaults objectForKey:@"AppleAccentColor"];
+    return [accent respondsToSelector:@selector(intValue)] ? (uint32_t)([accent intValue] + 2) : 0;
+}
+
+static pthread_mutex_t gProbeSendLock = PTHREAD_MUTEX_INITIALIZER;  // status and clicks share a connection
 
 static BOOL sendStatus(int fd, uint32_t status, uint32_t refuse) {
     NSOperatingSystemVersion v = NSProcessInfo.processInfo.operatingSystemVersion;
     StatusMsg m = { MAGIC_STATUS, status, (uint64_t)APP_VERSION << 16 | PROTOCOL_VERSION,
-                    (uint64_t)v.majorVersion << 32 | (uint64_t)v.minorVersion << 16 | (uint64_t)v.patchVersion, refuse, 0 };
-    return sendAll(fd, &m, sizeof m);
+                    (uint64_t)v.majorVersion << 32 | (uint64_t)v.minorVersion << 16 | (uint64_t)v.patchVersion, refuse, accentCode() };
+    pthread_mutex_lock(&gProbeSendLock);
+    BOOL ok = sendAll(fd, &m, sizeof m);
+    pthread_mutex_unlock(&gProbeSendLock);
+    return ok;
 }
 
 static void openSettings(NSString *url) {
     [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:url]];
 }
 
-// Asks for Screen Recording (macOS shows its prompt only the first time ever).
+// Asks for Screen Recording through macOS's prompt (which macOS shows only now and then).
 static void requestScreenRecording(void) {
     gScreenPrompted = YES;
     gScreenAskedNs = nowNs();
-    [NSUserDefaults.standardUserDefaults setBool:YES forKey:@"ScreenPromptShown"];
     dispatch_async(dispatch_get_main_queue(), ^{ CGRequestScreenCaptureAccess(); });
 }
 
@@ -1864,36 +1932,31 @@ static void moveToApplications(void) {
     gBusy = NO;
 }
 
+// Asks through macOS's own prompt, which also lists this exact build in System Settings (a
+// copy from an earlier build doesn't count: its switch can be on while this one's isn't). macOS
+// shows that prompt only now and then; when none appears, the System Settings page opens
+// instead, so asking always shows something on the Mac.
+static void askOrOpen(void (^ask)(void), NSString *page) {
+    dispatch_async(dispatch_get_main_queue(), ask);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1200 * NSEC_PER_MSEC), dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        if (screenBits() & ST_PROMPT_UP) return;
+        printf("Setup: no prompt showed; opening System Settings.\n");
+        dispatch_async(dispatch_get_main_queue(), ^{ openSettings(page); });
+    });
+}
+
 static void runActions(uint32_t actions) {
-    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
-    // macOS shows each prompt once ever, and the prompt has its own button to System Settings:
-    // the first ask shows the prompt alone, later asks open the page.
-    if (actions & ACT_SCREEN) {
+    if ((actions & ACT_SCREEN) && !CGPreflightScreenCaptureAccess()) {
+        printf("Setup: asking for Screen Recording.\n");
         gScreenAskedNs = nowNs();
-        if (!CGPreflightScreenCaptureAccess() && ![d boolForKey:@"ScreenPromptShown"]) {
-            printf("Setup: asking for Screen Recording.\n");
-            requestScreenRecording();
-        } else {
-            printf("Setup: opening Screen Recording in System Settings.\n");
-            gScreenPrompted = YES;
-            dispatch_async(dispatch_get_main_queue(), ^{
-                openSettings(@"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture");
-            });
-        }
+        gScreenPrompted = YES;
+        askOrOpen(^{ CGRequestScreenCaptureAccess(); }, @"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture");
     }
-    if (actions & ACT_ACCESSIBILITY) {
-        BOOL prompt = !AXIsProcessTrusted() && ![d boolForKey:@"AXPromptShown"];
-        printf(prompt ? "Setup: asking for Accessibility.\n" : "Setup: opening Accessibility in System Settings.\n");
+    if ((actions & ACT_ACCESSIBILITY) && !AXIsProcessTrusted()) {
+        printf("Setup: asking for Accessibility.\n");
         gTrustPrompted = YES;
-        [d setBool:YES forKey:@"AXPromptShown"];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (prompt) {
-                NSDictionary *o = @{ (__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES };
-                AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)o);
-            } else {
-                openSettings(@"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
-            }
-        });
+        askOrOpen(^{ AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)@{ (__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES }); },
+                  @"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
     }
     if (actions & ACT_LOGIN_ITEMS) {
         printf("Setup: opening Login Items.\n");
@@ -1926,6 +1989,227 @@ static void runActions(uint32_t actions) {
             relaunch();
         }
     });
+}
+
+// ---- The setup window on the new display (the handover when the picture starts) ----
+// The laptop's setup says where its window is on the laptop's panel just before it starts the
+// screen. When that screen adds this display, the same wizard opens here, in that exact spot and
+// size, drawn by the same page (bundled in the app, setup-ui), in a window that only differs by
+// macOS's own buttons top left. The laptop's copy stays in charge: its state and place arrive
+// here (mirror) and clicks here go back to it. Once this window is drawn and a frame with it has
+// gone out, the receiver hears so and shows the picture: on the laptop, only what's behind the
+// window changes.
+#define MAGIC_SETUP_WINDOW 0x58444355u // "UCDX" setup -> Mac: {x | y << 16, w | h << 16, dpi %}, panel pixels; w = 0 closes it
+#define MAGIC_MIRROR       0x45444355u // "UCDE" setup -> Mac: {length} + the wizard's state and place as JSON
+#define MAGIC_CLICK        0x43444355u // "UCDC" Mac -> setup: 32 bytes {magic, length} + JSON {act, data}
+#define MAGIC_WINDOW_READY 0x56444355u // "UCDV" Mac -> receiver: {the last frame sent, which has the window in it}
+
+static struct { BOOL wanted; int x, y, w, h, dpi, fd; } gSetupReq = { NO, 0, 0, 0, 0, 0, -1 };  // under gStatusLock
+static double gPxPerPt;        // the session's laptop pixels per point of this display (0: no session)
+static uint64_t gScreenUpNs;   // when this session's display was ready
+static CGDirectDisplayID gSetupDisplay;
+static NSWindow *gSetupWindow; // the rest: main thread only
+static WKWebView *gSetupWeb;
+static NSString *gSetupMirror;
+static BOOL gSetupLoaded;
+
+static void sendClick(NSString *json) {
+    pthread_mutex_lock(&gStatusLock);
+    int fd = gSetupReq.fd;
+    pthread_mutex_unlock(&gStatusLock);
+    NSData *d = [json dataUsingEncoding:NSUTF8StringEncoding];
+    if (fd < 0 || !d) return;
+    StatusMsg h = { MAGIC_CLICK, (uint32_t)d.length, 0, 0, 0, 0 };
+    pthread_mutex_lock(&gProbeSendLock);
+    if (!sendAll(fd, &h, sizeof h) || !sendAll(fd, d.bytes, d.length)) printf("Setup: a click didn't reach the laptop.\n");
+    pthread_mutex_unlock(&gProbeSendLock);
+}
+
+static void deliverMirror(void) {
+    if (gSetupWeb && gSetupLoaded && gSetupMirror)
+        [gSetupWeb evaluateJavaScript:[NSString stringWithFormat:@"window.usbcDeliver(%@)", gSetupMirror] completionHandler:nil];
+}
+
+// Once the page is drawn, the frames that show it go out within a few refreshes: then the
+// receiver may show the picture (the last frame sent has the window in it). Not before the new
+// display has had 1.5 s to draw its wallpaper: the first picture had a white desktop.
+static void windowReadyLater(int tries) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 200 * NSEC_PER_MSEC), gCtlQueue, ^{
+        uint32_t seq = gLastSentSeq;
+        BOOL early = gScreenUpNs && nowNs() - gScreenUpNs < 1500 * NSEC_PER_MSEC;
+        if ((!seq || early) && tries > 0) { windowReadyLater(tries - 1); return; }
+        CtlMsg v = { MAGIC_WINDOW_READY, seq, 0, 0, {0} };
+        ctlSend(&v, sizeof v);
+        printf("Setup window drawn on the new screen (frame %u): the laptop shows the picture now.\n", seq);
+    });
+}
+
+@interface SetupBridge : NSObject <WKScriptMessageHandler, WKNavigationDelegate>
+@end
+@implementation SetupBridge
+- (void)userContentController:(WKUserContentController *)u didReceiveScriptMessage:(WKScriptMessage *)m {
+    NSDictionary *msg = [m.body isKindOfClass:NSDictionary.class] ? m.body : nil;
+    NSString *cmd = msg[@"cmd"];
+    if ([cmd isEqualToString:@"drawn"]) windowReadyLater(20);
+    else if ([cmd isEqualToString:@"act"]) {
+        NSData *d = [NSJSONSerialization dataWithJSONObject:msg options:0 error:nil];
+        if (d) sendClick([[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding]);
+    }
+}
+- (void)webView:(WKWebView *)w didFinishNavigation:(WKNavigation *)n {
+    gSetupLoaded = YES;
+    deliverMirror();
+}
+- (void)close:(id)sender { sendClick(@"{\"cmd\":\"act\",\"act\":\"close\",\"data\":{}}"); }
+@end
+static SetupBridge *gSetupBridge;
+
+static void closeSetupWindow(void) {
+    if (!gSetupWindow) { releasePanelColour(); return; }
+    [gSetupWindow orderOut:nil];
+    [gSetupWeb.configuration.userContentController removeScriptMessageHandlerForName:@"usbc"];
+    gSetupWindow = nil;
+    gSetupWeb = nil;
+    gSetupLoaded = NO;
+    printf("Setup window closed on the new screen.\n");
+    releasePanelColour();  // the rest of this screen is colour-managed again
+}
+
+// Lets the page run as it does in the Windows setup (app.js talks to window.chrome.webview):
+// its messages come here, the laptop's mirror goes to it, in the laptop copy's look.
+static NSString *const kSetupShim =
+    @"(function () {"
+     "  var listeners = [];"
+     "  window.chrome = { webview: {"
+     "    postMessage: function (m) { window.webkit.messageHandlers.usbc.postMessage(m); },"
+     "    addEventListener: function (t, fn) { if (t === 'message') listeners.push(fn); } } };"
+     "  window.usbcDeliver = function (data) { listeners.forEach(function (fn) { fn({ data: data }); }); };"
+     "  window.usbcHost = { mica: true, dark: true, windowsBuild: 0, appRegion: false, resumed: false, mac: true };"
+     "})();";
+
+static void setupMirror(NSString *json);
+
+// Opens (or moves) the setup window where the laptop's is, once this display shows in NSScreen.
+static void openSetupWindow(int tries) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (tries == 40 ? 0 : 250) * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+        pthread_mutex_lock(&gStatusLock);
+        BOOL wanted = gSetupReq.wanted;
+        int x = gSetupReq.x, y = gSetupReq.y, w = gSetupReq.w, h = gSetupReq.h, dpi = gSetupReq.dpi;
+        pthread_mutex_unlock(&gStatusLock);
+        double f = gPxPerPt;
+        if (!wanted || f <= 0) return;
+        NSScreen *screen = nil;
+        for (NSScreen *sc in NSScreen.screens)
+            if ([sc.deviceDescription[@"NSScreenNumber"] unsignedIntValue] == gSetupDisplay) screen = sc;
+        if (!screen) {  // a new display takes a moment to show up in NSScreen
+            if (tries > 0) openSetupWindow(tries - 1);
+            return;
+        }
+        // Laptop pixels to points (top-left origin there, bottom-left here), and the page's
+        // CSS pixels to the same physical size: Windows draws them at dpi %, this display at f
+        // laptop pixels per point. macOS puts windows on whole points, rounding down (54 px from
+        // the top at 1.25 px a point landed at 44 pt, a pixel low): round each edge to the
+        // nearest point here instead.
+        NSRect sf = screen.frame;
+        double left = round(x / f), top = round(y / f), right = round((x + w) / f), bottom = round((y + h) / f);
+        NSRect frame = NSMakeRect(sf.origin.x + left, NSMaxY(sf) - bottom, right - left, bottom - top);
+        double zoom = dpi / 100.0 / f;
+        if (!gSetupWindow) {
+            KeyableWindow *win = [[KeyableWindow alloc] initWithContentRect:frame styleMask:NSWindowStyleMaskBorderless
+                                                                    backing:NSBackingStoreBuffered defer:NO];
+            win.releasedWhenClosed = NO;
+            win.opaque = NO;
+            win.backgroundColor = NSColor.clearColor;
+            win.hasShadow = YES;
+            // macOS's own window material where Windows had Mica: the wallpaper, blurred and
+            // tinted, behind a page that is transparent in the same places.
+            NSVisualEffectView *glass = [[NSVisualEffectView alloc] initWithFrame:NSMakeRect(0, 0, frame.size.width, frame.size.height)];
+            glass.material = NSVisualEffectMaterialWindowBackground;
+            glass.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+            glass.state = NSVisualEffectStateActive;
+            CGFloat r = 8 * dpi / 100.0 / f;  // Windows 11's 8 px corners, in points
+            NSImage *mask = [NSImage imageWithSize:NSMakeSize(2 * r + 1, 2 * r + 1) flipped:NO drawingHandler:^BOOL(NSRect rect) {
+                [NSColor.blackColor setFill];
+                [[NSBezierPath bezierPathWithRoundedRect:rect xRadius:r yRadius:r] fill];
+                return YES;
+            }];
+            mask.capInsets = NSEdgeInsetsMake(r, r, r, r);
+            mask.resizingMode = NSImageResizingModeStretch;
+            glass.maskImage = mask;
+            win.contentView = glass;
+
+            if (!gSetupBridge) gSetupBridge = [SetupBridge new];
+            WKWebViewConfiguration *cfg = [WKWebViewConfiguration new];
+            [cfg.userContentController addScriptMessageHandler:gSetupBridge name:@"usbc"];
+            [cfg.userContentController addUserScript:[[WKUserScript alloc] initWithSource:kSetupShim
+                injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:YES]];
+            WKWebView *web = [[WKWebView alloc] initWithFrame:glass.bounds configuration:cfg];
+            [web setValue:@NO forKey:@"drawsBackground"];
+            web.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+            web.navigationDelegate = gSetupBridge;
+            web.wantsLayer = YES;
+            web.layer.cornerRadius = r;
+            web.layer.masksToBounds = YES;
+            [glass addSubview:web];
+
+            // macOS's own buttons, top left, centred on the page's 40 px title bar. Close acts
+            // like the page's own close button; the others are off, as on Windows.
+            NSWindowButton kinds[3] = { NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton };
+            CGFloat titleMid = frame.size.height - 20 * zoom;
+            for (int i = 0; i < 3; i++) {
+                NSButton *b = [NSWindow standardWindowButton:kinds[i] forStyleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable];
+                if (!b) continue;
+                NSSize s = b.frame.size;
+                [b setFrameOrigin:NSMakePoint(round(14 * zoom + i * (s.width + 8) ), round(titleMid - s.height / 2))];
+                b.autoresizingMask = NSViewMaxXMargin | NSViewMinYMargin;
+                if (i == 0) { b.target = gSetupBridge; b.action = @selector(close:); } else b.enabled = NO;
+                [glass addSubview:b];
+            }
+            NSURL *index = [NSBundle.mainBundle URLForResource:@"index" withExtension:@"html" subdirectory:@"setup-ui"];
+            if (!index) { printf("Setup window: this build has no setup-ui.\n"); return; }
+            [web loadFileURL:index allowingReadAccessToURL:index.URLByDeletingLastPathComponent];
+            gSetupWindow = win;
+            gSetupWeb = web;
+            gSetupLoaded = NO;
+            if (gSetupMirror) setupMirror(gSetupMirror);  // its look, if the mirror came first
+            holdPanelColour();  // asked for after this screen started: its colours as on the laptop
+        }
+        gSetupWeb.pageZoom = zoom;
+        [gSetupWindow setFrame:frame display:YES];
+        [gSetupWindow makeKeyAndOrderFront:nil];
+        [NSApp activateIgnoringOtherApps:YES];
+        [gSetupWindow invalidateShadow];
+        printf("Setup window opens on the new screen at %.0f,%.0f, %.0fx%.0f pt (zoom %.2f).\n",
+               frame.origin.x, frame.origin.y, frame.size.width, frame.size.height, zoom);
+    });
+}
+
+// UCDX from the setup: where its window is (or w = 0: close ours).
+static void setupWindowWanted(int fd, WinMsg q) {
+    int x = (int16_t)(q.a & 0xFFFF), y = (int16_t)(q.a >> 16), w = (int)(q.b & 0xFFFF), h = (int)(q.b >> 16), dpi = (int)(q.c & 0xFFFF);
+    pthread_mutex_lock(&gStatusLock);
+    gSetupReq.wanted = w > 0 && h > 0 && dpi > 0;
+    gSetupReq.x = x; gSetupReq.y = y; gSetupReq.w = w; gSetupReq.h = h; gSetupReq.dpi = dpi;
+    gSetupReq.fd = fd;
+    BOOL wanted = gSetupReq.wanted;
+    pthread_mutex_unlock(&gStatusLock);
+    if (wanted) {
+        printf("Setup: its window comes to the new screen (%dx%d at %d,%d, %d%%).\n", w, h, x, y, dpi);
+        if (gPxPerPt > 0) openSetupWindow(40);  // the screen is up already
+    } else {
+        dispatch_async(dispatch_get_main_queue(), ^{ closeSetupWindow(); });
+    }
+}
+
+// UCDE from the setup: its state and place, for our copy of its window. The window takes the
+// laptop copy's light or dark look (its glass is drawn by macOS), whatever this Mac uses.
+static void setupMirror(NSString *json) {
+    gSetupMirror = json;
+    NSDictionary *m = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    NSString *theme = [m isKindOfClass:NSDictionary.class] ? m[@"look"][@"theme"] : nil;
+    if (gSetupWindow && [theme isKindOfClass:NSString.class])
+        gSetupWindow.appearance = [NSAppearance appearanceNamed:[theme isEqualToString:@"light"] ? NSAppearanceNameAqua : NSAppearanceNameDarkAqua];
+    deliverMirror();
 }
 
 typedef struct { int fd; WinMsg q; int slot; uint64_t gen; } ProbeArgs;
@@ -1965,15 +2249,27 @@ static void *probeMain(void *arg) {
             break;
         }
         struct pollfd p = { fd, POLLIN, 0 };
-        int r = poll(&p, 1, 1000);
+        int r = poll(&p, 1, 250);  // the laptop shows what's on this screen: changes go out within 250 ms
         if (r < 0 && errno != EINTR) break;
-        query = r > 0;
-        if (query && (!recvAll(fd, &q, sizeof q) || q.magic != MAGIC_QUERY)) break;
-        if (query) lastQuery = nowNs();
+        query = NO;
+        if (r <= 0) continue;
+        if (!recvAll(fd, &q, sizeof q)) break;
+        lastQuery = nowNs();
+        if (q.magic == MAGIC_QUERY) query = YES;
+        else if (q.magic == MAGIC_SETUP_WINDOW) setupWindowWanted(fd, q);
+        else if (q.magic == MAGIC_MIRROR && q.a <= (1u << 20)) {
+            NSMutableData *d = [NSMutableData dataWithLength:q.a];
+            if (!recvAll(fd, d.mutableBytes, q.a)) break;
+            NSString *json = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];
+            if (json) dispatch_async(dispatch_get_main_queue(), ^{ setupMirror(json); });
+        } else break;
     }
     pthread_mutex_lock(&gStatusLock);
     if (gProbeSlots[slot].gen == gen) gProbeSlots[slot].gen = 0;
+    BOOL ownedWindow = gSetupReq.fd == fd;  // the setup that asked for the window is gone
+    if (ownedWindow) { gSetupReq.fd = -1; gSetupReq.wanted = NO; }
     pthread_mutex_unlock(&gStatusLock);
+    if (ownedWindow) dispatch_async(dispatch_get_main_queue(), ^{ closeSetupWindow(); });
     close(fd);
     printf("Setup app disconnected.\n");
     return NULL;
@@ -2089,14 +2385,20 @@ static BOOL setUpLoginAgent(void) {
                            @"RunAtLoad": @YES, @"KeepAlive": @YES, @"LimitLoadToSessionType": @"Aqua",
                            @"ProcessType": @"Interactive", @"AssociatedBundleIdentifiers": @[ AGENT_LABEL ] };
     [fm createDirectoryAtPath:plist.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:nil];
-    const char *bootout[] = { "/bin/launchctl", "bootout", [domain stringByAppendingFormat:@"/%@", APP_AGENT_LABEL].UTF8String, NULL };
+    NSString *service = [domain stringByAppendingFormat:@"/%@", APP_AGENT_LABEL];
+    const char *bootout[] = { "/bin/launchctl", "bootout", service.UTF8String, NULL };
+    const char *print[] = { "/bin/launchctl", "print", service.UTF8String, NULL };
     toolOutput(bootout);  // the old version, or a stuck one (an error if none is loaded)
+    // bootout returns before launchd has let go of the job, and loading it again too soon fails
+    // with "5: Input/output error" (seen updating from version 3): wait until it's gone.
+    for (int i = 0; i < 40 && toolOutput(print).length; i++) usleep(100000);
     if (![job writeToFile:plist atomically:YES]) {
         printf("Could not write %s.\n", plist.UTF8String);
         return NO;
     }
     const char *bootstrap[] = { "/bin/launchctl", "bootstrap", domain.UTF8String, plist.fileSystemRepresentation, NULL };
-    BOOL ok = runTool(bootstrap) == 0;
+    BOOL ok = NO;
+    for (int i = 0; i < 4 && !(ok = runTool(bootstrap) == 0); i++) usleep(500000);
     if (ok) noteAgentVersion();
     printf("Login agent %s.\n", ok ? "installed" : "could not be loaded");
     if (ok && agentRunning(8)) return YES;
@@ -2155,7 +2457,7 @@ static void *sessionMain(void *arg) {
         int fresh = gAgent || gInBundle ? screenAllowedForNewProcess(YES) : 0;
         if (fresh != 1 && !gScreenPrompted) requestScreenRecording();
         printf("Not allowed to record the screen yet: allow %s in System Settings >\n"
-               "Privacy & Security > Screen Recording.\n", gAgent || gInBundle ? "USB-C Display" : "your terminal app");
+               "Privacy & Security > Screen & System Audio Recording.\n", gAgent || gInBundle ? "USB-C Display" : "your terminal app");
         if (h.flags & HELLO_STATUS) sendStatus(ctl, currentStatus(), REFUSE_NO_SCREEN_RECORDING);
         // A permission granted since this process started only applies to a new one, and
         // launchd starts the agent again right away; the receiver keeps retrying meanwhile.
@@ -2202,6 +2504,7 @@ static void *sessionMain(void *arg) {
 
     CGDirectDisplayID did = CGMainDisplayID();
     BOOL colorManaged = NO;  // rendered for the laptop panel: capture without converting to sRGB
+    BOOL setupHere = NO;     // the setup's window is on its way: the profile waits (gColour...)
     if (gBench) {
         printf("Benchmark: sending %dx%d frames that change completely, %d per second.\n",
                outW, outH, gMaxBenchHz ? gMaxBenchHz : hz);
@@ -2228,8 +2531,15 @@ static void *sessionMain(void *arg) {
         gDisplayExpires = 0;
         if (gDisplay) {
             did = gDisplay.displayID;
-            colorManaged = applyPanelProfile(did, sa->profile);
+            pthread_mutex_lock(&gStatusLock);
+            setupHere = gSetupReq.wanted;
+            pthread_mutex_unlock(&gStatusLock);
+            colorManaged = applyPanelProfile(did, setupHere ? NULL : sa->profile);
             if (h.flags & HELLO_TEST_CARD) showTestCard(did, 40, (h.flags & HELLO_TEST_DRAG) != 0);  // a new display can take seconds to appear
+            gSetupDisplay = did;
+            gPxPerPt = (double)outW / ptW;
+            gScreenUpNs = nowNs();
+            openSetupWindow(40);  // the setup's handover, if it asked for its window here
         }
     } else {
         printf("Mirroring the main display at %dx%d.\n", outW, outH);
@@ -2253,6 +2563,7 @@ static void *sessionMain(void *arg) {
         cfg.height = capH;
         cfg.pixelFormat = kCVPixelFormatType_32BGRA;
         // Colour-managed: macOS already rendered for the panel, so take its pixels as they are.
+        CFStringRef nativeSpace = cfg.colorSpaceName;
         if (!colorManaged) cfg.colorSpaceName = kCGColorSpaceSRGB;
         cfg.minimumFrameInterval = CMTimeMake(1, hz);
         cfg.queueDepth = 4;
@@ -2272,6 +2583,19 @@ static void *sessionMain(void *arg) {
             stream = nil;
         }
         if (stream && (h.flags & HELLO_TEST_CARD)) saveNativeCapture(display, gMirror ? outW : pxW, gMirror ? outH : pxH);
+        if (stream && !gMirror && sa->profile) {
+            CFDataRef profile = CFRetain(sa->profile);
+            dispatch_sync(dispatch_get_main_queue(), ^{
+                gColourDisplay = did;
+                gColourProfile = profile;
+                gColourStream = stream;
+                gColourCfg = cfg;
+                gColourNative = nativeSpace;
+                gColourHeld = setupHere;
+                if (setupHere) printf("The colour profile waits while the setup window is on this screen.\n");
+                if (!setupHere && gSetupWindow) holdPanelColour();
+            });
+        }
     }
 
     if (stream || gBench) {
@@ -2371,6 +2695,13 @@ static void *sessionMain(void *arg) {
         if (gBench) pthread_join(bench, NULL);
         destroyEncoder();
         if (gTestCard) hideTestCard();
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            if (gColourProfile) CFRelease(gColourProfile);
+            gColourProfile = NULL;
+            gColourStream = nil;
+            gColourCfg = nil;
+            gColourHeld = NO;
+        });
 
         if (stream) {
             dispatch_semaphore_t sem = dispatch_semaphore_create(0);
@@ -2390,6 +2721,7 @@ static void *sessionMain(void *arg) {
     close(ctl);
     close(frm);
     printf("Receiver disconnected.\n");
+    gPxPerPt = 0;  // a setup window asked for from now on waits for the next screen
 
     if (gDisplay) {
         gDisplayExpires = nowNs() + DISPLAY_GRACE_SEC * NSEC_PER_SEC;
@@ -2439,7 +2771,7 @@ static BOOL peerOnCable(const struct sockaddr_storage *peer, char *ifname) {
 }
 
 static void serveForever(void) {
-    int ls, one = 1;
+    int ls, one = 1, busyTries = 0;
     for (BOOL told = NO;; told = YES) {
         ls = socket(AF_INET6, SOCK_STREAM, 0);
         setCloexec(ls);  // children (open, sh, the screen check) must not keep the port
@@ -2458,6 +2790,9 @@ static void serveForever(void) {
             continue;
         }
         if (gInBundle && e == EADDRINUSE) {
+            // Often an older copy on its way out (an update just stopped its agent): give it
+            // a few seconds before leaving the port to whoever has it.
+            if (++busyTries <= 10) { usleep(500000); continue; }
             printf("Another copy is answering already; quitting.\n");
             exit(0);
         }
@@ -2644,7 +2979,7 @@ int main(int argc, const char *argv[]) {
         // login there would be no telling what the request is for.
         if (!gBench && !CGPreflightScreenCaptureAccess()) {
             printf("Screen Recording isn't allowed yet. macOS asks for it the first time the laptop\n"
-                   "needs it; allow %s in System Settings > Privacy & Security > Screen Recording.\n",
+                   "needs it; allow %s in System Settings > Privacy & Security > Screen & System Audio Recording.\n",
                    gAgent || gInBundle ? "USB-C Display" : "this terminal app");
         }
         // Going to sleep or being stopped: the receiver hides its window right away.

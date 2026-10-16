@@ -2,9 +2,22 @@
    html and body stay transparent so Mica shows through. The host adds
    "no-mica" on <html> when Mica is not available. */
 
+/* Inter, bundled (fonts/Inter-OFL.txt): the same letters on the laptop and in the Mac's copy of
+   this window (the handover when the picture starts), where Segoe UI and SF can't both go. */
+@font-face {
+  font-family: "Inter";
+  src: url("fonts/Inter.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: block;
+}
+
+/* Inter's optical size follows the rendered size, which Safari and WebView2 work out differently
+   (the Mac's copy is zoomed): same shapes everywhere, so lines break in the same places. */
+html { font-optical-sizing: none; }
+
 :root {
-  --font: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
-  --font-display: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Inter", "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
 
   --ease-out: cubic-bezier(0, 0, 0, 1);
   --ease-std: cubic-bezier(0.8, 0, 0.2, 1);
@@ -156,6 +169,14 @@ a { color: var(--accent-text); }
 .caption.close:hover { background: #c42b1c; color: #fff; }
 .caption.close:active { background: #c84031; color: rgba(255,255,255,.7); }
 
+/* The Mac's copy of this window: everything the same, but macOS's own buttons (drawn by the Mac
+   app) top left instead of Windows' top right. */
+html.mac-window .caption { display: none; }
+/* macOS's dark window material comes out about a quarter brighter than Windows' Mica (measured:
+   #322C2A against #251E1E in the rail): the same darkness, each tinted by its own wallpaper. */
+html.mac-window[data-theme="dark"] body { background: rgba(0, 0, 0, 0.26); }
+html.mac-window .titlebar { padding-left: 84px; -webkit-app-region: no-drag; app-region: no-drag; }
+
 /* ---------- Rail: the journey in two lanes ---------- */
 
 .rail {
@@ -282,14 +303,16 @@ html.no-mica .main { background: color-mix(in srgb, var(--solid-bg) 70%, var(--c
   margin: 12px 0 0;
   font-family: var(--font-display);
   font-size: 28px; line-height: 36px; font-weight: 600;
-  text-wrap: balance;
+  /* Plain wrapping, not balance or pretty: Chrome and Safari break those differently, and the
+     Mac's copy of this window must break lines exactly where the laptop's does. */
+  text-wrap: wrap;
 }
 .title .ok-badge { display: inline-grid; place-items: center; vertical-align: -3px; width: 26px; height: 26px; border-radius: 50%; background: var(--success); color: var(--solid-bg); margin-left: 10px; animation: pop var(--dur-4) var(--ease-fast); }
 .title .ok-badge svg { width: 14px; height: 14px; }
 @keyframes pop { from { transform: scale(0.4); opacity: 0; } }
 
 .col { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 14px; }
-.lead { margin: 6px 0 0; color: var(--text-2); max-width: 62ch; text-wrap: pretty; }
+.lead { margin: 6px 0 0; color: var(--text-2); max-width: 540px; text-wrap: wrap; }  /* px, not ch: the same in both engines */
 .lead b { color: var(--text-1); font-weight: 600; }
 .note { margin: 0; font-size: 14px; line-height: 20px; color: var(--text-2); }
 .note b { color: var(--text-1); font-weight: 600; }
@@ -519,6 +542,8 @@ html.no-mica .main { background: color-mix(in srgb, var(--solid-bg) 70%, var(--c
 .spinner { width: 16px; height: 16px; flex: none; animation: spin 1.6s linear infinite; }
 .spinner circle { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-dasharray: 30 60; }
 .spinner.big { width: 24px; height: 24px; }
+.footer .status .ok-ic { flex: none; width: 16px; height: 16px; display: grid; place-items: center; color: var(--accent); }
+.footer .status .ok-ic svg { width: 16px; height: 16px; stroke-width: 1.8; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .progress { height: 4px; border-radius: 2px; background: var(--track); overflow: hidden; position: relative; }

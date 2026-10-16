@@ -167,9 +167,9 @@ sealed class WebServer
             Send(s, 400, "Bad Request", "text/plain; charset=utf-8", Encoding.UTF8.GetBytes("Bad request\n"), false, null);
             return false;
         }
-        string method = parts[0], path = parts[1];
+        string method = parts[0], path = parts[1], query = "";
         int q = path.IndexOfAny(new[] { '?', '#' });
-        if (q >= 0) path = path[..q];
+        if (q >= 0) { query = path[q..]; path = path[..q]; }
         bool head_ = method == "HEAD";
         // A request with a body isn't expected here: answer it, then close, so the body is never
         // read as the next request.
@@ -194,6 +194,13 @@ sealed class WebServer
                 return keepAlive;
             case "/USB-C-Display.zip":
                 return SendZip(s, head_, keepAlive);
+            case "/event":
+                // The page in Safari says where the person is (Safari in front or not, the
+                // settings button clicked), so the laptop can show the matching step. One word.
+                string e = query.StartsWith("?e=") ? query[3..] : "";
+                if (e is "focus" or "blur" or "settings") wizard.OnPageEvent(e);
+                Send(s, 204, "No Content", "text/plain; charset=utf-8", Array.Empty<byte>(), head_, "Cache-Control: no-store\r\n", keepAlive);
+                return keepAlive;
         }
         Send(s, 404, "Not Found", "text/plain; charset=utf-8", Encoding.UTF8.GetBytes("Not found\n"), head_, null, keepAlive);
         return keepAlive;

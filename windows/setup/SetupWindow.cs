@@ -55,6 +55,8 @@ sealed class SetupWindow : Form
         poster.Tick += (_, _) => Post();
         wizard.InstalledElsewhere += () => BeginInvokeSafe(HandOff);
         wizard.ScreenClosed += () => BeginInvokeSafe(BringForward);
+        wizard.WindowPlace = PanelPlace;
+        wizard.RemoteClick += OnRemoteClick;
         SystemEvents.UserPreferenceChanged += OnThemeChanged;
     }
 
@@ -313,7 +315,7 @@ sealed class SetupWindow : Form
     void Dispatch(JsonElement m)
     {
         string cmd = m.TryGetProperty("cmd", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : "";
-        if (cmd != "startDrag") Log.Write("ui: " + cmd);
+        if (cmd != "startDrag" && cmd != "mirror") Log.Write("ui: " + cmd);
         switch (cmd)
         {
             case "ready": wizard.Changed(); Post(); break;
@@ -323,6 +325,8 @@ sealed class SetupWindow : Form
             case "macAction": wizard.MacAction(Str(m, "action")); break;
             case "saveSettings": wizard.SaveSettings(Int(m, "scale"), Bool(m, "matchColors"), Bool(m, "useLaptopInput")); break;
             case "startScreen": wizard.StartScreen(); break;
+            case "stopScreen": wizard.StopScreen(); break;
+            case "mirror": wizard.SetMirrorLocal(Str(m, "json") ?? ""); break;
             case "copy":
                 string text = Str(m, "text");
                 if (!string.IsNullOrEmpty(text)) try { Clipboard.SetText(text); } catch (Exception ex) { Log.Write("copy: " + ex.Message); }
@@ -346,7 +350,38 @@ sealed class SetupWindow : Form
         var core = web.CoreWebView2;
         if (core == null) return;
         string json = wizard.TakeIfDirty();
-        if (json != null) try { core.PostWebMessageAsJson(json); } catch { }
+        if (json == null) return;
+        try { core.PostWebMessageAsJson(json); } catch { }
+        wizard.StatePosted(json);
+    }
+
+    // Where the page is on the laptop's panel, in pixels, for the Mac's copy of this window. Only
+    // on the laptop's own panel (where the picture shows) and while the window is up.
+    (Rectangle, int)? PanelPlace()
+    {
+        if (!IsHandleCreated || WindowState != FormWindowState.Normal) return null;
+        var screen = Screen.FromHandle(Handle);
+        if (!screen.Primary) return null;
+        var r = RectangleToScreen(ClientRectangle);
+        r.Offset(-screen.Bounds.X, -screen.Bounds.Y);
+        return (r, DeviceDpi * 100 / 96);
+    }
+
+    // A click in the Mac's copy of this window: this page acts on it, as if clicked here.
+    void OnRemoteClick(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var m = doc.RootElement;
+            string act = Str(m, "act");
+            if (act == null) return;
+            string data = m.TryGetProperty("data", out var d) && d.ValueKind == JsonValueKind.Object ? d.GetRawText() : "{}";
+            string msg = "{\"type\":\"remoteAct\",\"act\":" + JsonSerializer.Serialize(act) + ",\"data\":" + data + "}";
+            BeginInvokeSafe(() => { try { web.CoreWebView2?.PostWebMessageAsJson(msg); } catch { } });
+            Log.Write("ui: " + act + " (on the Mac)");
+        }
+        catch (Exception e) { Log.Write("remote click: " + e.Message); }
     }
 
     static void OpenExternal(string uri)

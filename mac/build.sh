@@ -15,7 +15,7 @@
 # shipping.
 set -e
 cd "$(dirname "$0")"
-FRAMEWORKS="-framework AppKit -framework ScreenCaptureKit -framework CoreMedia -framework CoreVideo -framework VideoToolbox -framework IOKit -framework Metal -framework MetalPerformanceShaders -framework Accelerate -framework ColorSync -framework ApplicationServices -framework ServiceManagement -lcompression"
+FRAMEWORKS="-framework AppKit -framework WebKit -framework ScreenCaptureKit -framework CoreMedia -framework CoreVideo -framework VideoToolbox -framework IOKit -framework Metal -framework MetalPerformanceShaders -framework Accelerate -framework ColorSync -framework ApplicationServices -framework ServiceManagement -lcompression"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 # Built aside and moved into place, so a running agent keeps its own copy until it restarts.
@@ -54,6 +54,13 @@ rm -rf "$APP" dist/USB-C-Display.zip
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Library/LaunchAgents"
 cp usbc-display "$APP/Contents/MacOS/usbc-display"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
+# The laptop's setup screens, for the same window on the Mac's new screen when the picture starts.
+if [ -f ../windows/setup/ui/index.html ]; then
+    mkdir -p "$APP/Contents/Resources/setup-ui"
+    cp -R ../windows/setup/ui/. "$APP/Contents/Resources/setup-ui/"
+else
+    echo "windows/setup/ui not found: the app won't open the setup's window on the new screen"
+fi
 
 # Icon: drawn by make-icon.m, every size macOS asks for.
 clang -fobjc-arc -O2 -Wall -mmacosx-version-min=12.3 make-icon.m -o "$TMP/make-icon" \
