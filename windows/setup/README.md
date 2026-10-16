@@ -7,9 +7,14 @@ Mac app.
 
 ## How it works
 
-- **Window.** WinForms with a WebView2 that fills it. No title bar of its own: Mica shows through
-  a transparent page (Windows 11 22H2 and later; older builds get `no-mica` on `<html>` and the
-  page paints a solid background). The page gets the accent colours as CSS variables on
+- **Window.** A Mac window from the start, so the Mac's copy after the handover is the same
+  window. WinForms with a WebView2 that fills it, on a transparent canvas
+  (`WS_EX_NOREDIRECTIONBITMAP`, no DWM backdrop, corners, border or shadow): the page draws the
+  window itself (macOS 27's 16 pt continuous corners, its edge, title bar and traffic lights,
+  sized in Mac points, `--mpt`), and outside its corners the desktop shows. `MacShadow` draws a
+  Mac-shaped shadow in a click-through layered window just below it (its shape comes from the
+  page's `chrome` message). The host tells the page when the window is in front or not
+  (`{type: 'active'}`): the lights and title go grey, as on a Mac. The page gets the accent colours as CSS variables on
   `<html>`: `--accent` is the shade Windows 11 fills buttons with for the current theme,
   `--accent-system` the colour picked in Settings, plus `--accent-light-1..3` and
   `--accent-dark-1..3`. Also `window.usbcHost = { mica, dark, windowsBuild }`. Elements with CSS `app-region: drag` move the window (`app-region: no-drag`

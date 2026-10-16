@@ -129,7 +129,12 @@ the download. `mac.appearance` and `mac.accent` let the Mac scenes use the Mac's
 | `copy` | `text` | clipboard (handled, not used by the current UI) |
 | `finish` | | sets SetupDone, hands over to the tray watcher, closes |
 | `close` | | closes the window (setup can resume later) |
-| `minimize` | | minimizes |
+| `minimize` | | minimizes (on the Mac's copy: into the Mac's Dock, not passed to the laptop) |
+| `chrome` | `point`, `width`, `height` | the window's Mac point and size in CSS px, for the Windows host's Mac-shaped shadow |
+
+Host → UI, besides the state: `{type: 'active', on}` when the window comes in front or goes
+behind (each copy's own host: the Mac app for the Mac's copy); the page greys its traffic lights
+and title, as macOS does.
 
 ## 4. Files served to the Mac (`http://usbc.local`, port 80, cable addresses only)
 

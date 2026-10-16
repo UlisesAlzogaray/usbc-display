@@ -22,6 +22,72 @@
   if (mq.addEventListener) mq.addEventListener('change', () => { setTheme(); });
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
 
+  // ---------- The window ----------
+  // A Mac window's parts are sized in Mac points. On the Mac's new screen the laptop shows its
+  // recommended size: f panel pixels a point (scale 125: 1.25), and Windows draws a CSS pixel as
+  // devicePixelRatio panel pixels, so a point is f / devicePixelRatio CSS pixels. The Mac's copy
+  // takes the laptop copy's value (the mirror carries <html>'s style), so both draw it alike.
+  const appEl = document.getElementById('app');
+  const pointNow = () => parseFloat(getComputedStyle(root).getPropertyValue('--mpt')) || 0.8333;
+  let mptSet = 0;
+  function setMacPoint() {
+    if (mirrored) return;
+    const opts = (typeof S !== 'undefined' && S.settings && S.settings.scaleOptions) || [];
+    const rec = opts.find((o) => o.recommended);
+    const f = (rec && rec.id >= 50 ? rec.id : 125) / 100;
+    const v = Math.round((f / (window.devicePixelRatio || 1)) * 10000) / 10000;
+    if (v === mptSet) return;
+    mptSet = v;
+    root.style.setProperty('--mpt', v + 'px');
+    shape();
+  }
+
+  // macOS's window corner: 16 pt, with its continuous curve (it starts 24 pt from the corner;
+  // measured on macOS 27). The path is Figma's "corner smoothing" squircle, smoothing 0.5.
+  function squircle(w, h, R, smooth) {
+    const rad = (d) => (d * Math.PI) / 180;
+    R = Math.min(R, w / 2, h / 2);
+    const p = Math.min((1 + smooth) * R, w / 2, h / 2);
+    const arcMeasure = 90 * (1 - smooth);
+    const arc = Math.sin(rad(arcMeasure / 2)) * R * Math.SQRT2;
+    const p34 = R * Math.tan(rad((90 - arcMeasure) / 4));
+    const beta = 45 * smooth;
+    const c = p34 * Math.cos(rad(beta));
+    const d = c * Math.tan(rad(beta));
+    const b = (p - arc - c - d) / 3;
+    const a = 2 * b;
+    const n = (x) => +x.toFixed(3);
+    const k = [a, a + b, a + b + c].map(n), A = n(arc), C = n(c), D = n(d), B = n(b + c), r = n(R);
+    return 'M' + n(w - p) + ' 0c' + k[0] + ' 0 ' + k[1] + ' 0 ' + k[2] + ' ' + D + 'a' + r + ' ' + r + ' 0 0 1 ' + A + ' ' + A +
+      'c' + D + ' ' + C + ' ' + D + ' ' + B + ' ' + D + ' ' + k[2] + 'L' + n(w) + ' ' + n(h - p) +
+      'c0 ' + k[0] + ' 0 ' + k[1] + ' ' + -D + ' ' + k[2] + 'a' + r + ' ' + r + ' 0 0 1 ' + -A + ' ' + A +
+      'c' + -C + ' ' + D + ' ' + -B + ' ' + D + ' ' + -k[2] + ' ' + D + 'L' + n(p) + ' ' + n(h) +
+      'c' + -k[0] + ' 0 ' + -k[1] + ' 0 ' + -k[2] + ' ' + -D + 'a' + r + ' ' + r + ' 0 0 1 ' + -A + ' ' + -A +
+      'c' + -D + ' ' + -C + ' ' + -D + ' ' + -B + ' ' + -D + ' ' + -k[2] + 'L0 ' + n(p) +
+      'c0 ' + -k[0] + ' 0 ' + -k[1] + ' ' + D + ' ' + -k[2] + 'a' + r + ' ' + r + ' 0 0 1 ' + A + ' ' + -A +
+      'c' + C + ' ' + -D + ' ' + B + ' ' + -D + ' ' + k[2] + ' ' + -D + 'Z';
+  }
+
+  // The window's shape and edge for its size. The Windows host also gets it, for the shadow.
+  let shapeSent = '';
+  function shape() {
+    const w = appEl.clientWidth, h = appEl.clientHeight;
+    if (!w || !h) return;
+    const mpt = pointNow();
+    const d = squircle(w, h, 16 * mpt, 0.5);
+    appEl.style.clipPath = "path('" + d + "')";
+    const edge = document.getElementById('win-edge');
+    edge.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+    edge.querySelectorAll('path').forEach((p) => p.setAttribute('d', d));
+    edge.querySelector('.out').setAttribute('stroke-width', String(mpt));     // half shows: 0.5 pt
+    edge.querySelector('.hi').setAttribute('stroke-width', String(3 * mpt));  // 1 pt inside that
+    const key = w + 'x' + h + '@' + mpt;
+    if (host && !mirrored && key !== shapeSent) {
+      shapeSent = key;
+      host.postMessage({ cmd: 'chrome', point: mpt, width: w, height: h });
+    }
+  }
+
   // ---------- State ----------
   const DEFAULTS = {
     laptop: { windowsBuild: 0, arch: '', isAdminUser: true, usb4: 'unknown', installed: false, elevation: 'none', firewallOk: false, recoveryTasksOk: false, installError: '', installing: false },
@@ -138,6 +204,7 @@
   let shownSent = false;
   function onMessage(msg) {
     if (msg && msg.type === 'mirror') onMirror(msg);
+    else if (msg && msg.type === 'active') root.classList.toggle('inactive', !msg.on);  // from each copy's own host
     else if (msg && msg.type === 'remoteAct') doAct(msg.act, { dataset: msg.data || {}, disabled: false });
     else onState(msg);
   }
@@ -149,7 +216,7 @@
     Object.assign(L, msg.local || {}, { hold: false });
     const look = msg.look || {};
     if (look.theme) root.dataset.theme = look.theme;
-    if (look.style != null && root.getAttribute('style') !== look.style) root.setAttribute('style', look.style);
+    if (look.style != null && root.getAttribute('style') !== look.style) { root.setAttribute('style', look.style); shape(); }
     haveState = true;
     render();
     if (!shownSent) {
@@ -176,6 +243,7 @@
     if (!msg || msg.type !== 'state') return;
     if (mirrored) return;  // the Mac's copy draws from the laptop's mirror only
     S = merge(DEFAULTS, msg);
+    setMacPoint();
     if (!haveState) {
       haveState = true;
       const pp = D.previewParams || {};
@@ -445,7 +513,9 @@
   document.addEventListener('click', (e) => {
     const el = e.target.closest('[data-act]');
     if (!el || el.disabled) return;
-    // On the Mac's copy every click is the laptop copy's to act on (its data goes along).
+    // On the Mac's copy every click is the laptop copy's to act on (its data goes along), except
+    // minimize: that's this window's own, into the Mac's Dock.
+    if (mirrored && el.dataset.act === 'minimize') { send({ cmd: 'minimize' }); return; }
     if (mirrored) { send({ cmd: 'act', act: el.dataset.act, data: Object.assign({}, el.dataset) }); return; }
     doAct(el.dataset.act, el);
   });
@@ -465,10 +535,12 @@
 
   if (window.ResizeObserver) {
     new ResizeObserver(fit).observe($('stage'));
-    new ResizeObserver(() => { layoutTracks(); overflow(); }).observe($('app'));
+    new ResizeObserver(() => { layoutTracks(); overflow(); shape(); }).observe($('app'));
   }
 
   // ---------- Boot ----------
+  setMacPoint();
+  shape();
   render();
   if (host) {
     host.addEventListener('message', (e) => onMessage(e.data));

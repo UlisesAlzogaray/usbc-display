@@ -15,9 +15,12 @@ using Microsoft.Win32;
 
 namespace UsbcSetup;
 
-// The setup window: no title bar of its own, Mica behind a transparent WebView2 that shows the
-// wizard (ui/**, from this exe's resources). The page draws its own caption: elements with CSS
-// `app-region: drag` move the window, and it posts "minimize" / "close".
+// The setup window: a transparent canvas for a transparent WebView2 that shows the wizard (ui/**,
+// from this exe's resources). The page draws a Mac window on it, as the Mac's copy of this window
+// will look after the handover: macOS's corners, edge, title bar and traffic lights. Outside its
+// corners the desktop shows (no redirection surface: the WebView's alpha reaches the desktop), and
+// MacShadow draws a Mac shadow under it. Elements with CSS `app-region: drag` move the window; the
+// page posts "minimize" / "close".
 sealed class SetupWindow : Form
 {
     const string Origin = "https://setup.usbc-display.example";
@@ -30,7 +33,8 @@ sealed class SetupWindow : Form
     readonly System.Windows.Forms.Timer poster = new() { Interval = 100 };  // state at most 10 times a second
     CoreWebView2Environment env;
     bool mica;
-    bool appRegion;  // the runtime supports CSS app-region (WebView2 1.0.2420 and later)
+    bool appRegion;
+    MacShadow shadow;  // the runtime supports CSS app-region (WebView2 1.0.2420 and later)
 
     public SetupWindow(Wizard wizard, Point? at, bool resumed, IntPtr behind)
     {
@@ -44,7 +48,7 @@ sealed class SetupWindow : Form
         MaximizeBox = false;
         MinimizeBox = true;
         StartPosition = FormStartPosition.Manual;
-        BackColor = Color.Black;  // black is where the Mica backdrop shows through
+        BackColor = Color.Black;  // never seen: there's no redirection surface
         try { Icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath); } catch { }
         Place(at);
 
@@ -98,6 +102,7 @@ sealed class SetupWindow : Form
         {
             var cp = base.CreateParams;
             cp.Style = (cp.Style & ~Native.WS_SYSMENU) | Native.WS_MINIMIZEBOX;
+            cp.ExStyle |= Native.WS_EX_NOREDIRECTIONBITMAP;  // the page's transparent corners show the desktop
             return cp;
         }
     }
@@ -115,32 +120,39 @@ sealed class SetupWindow : Form
         // The whole window is client area: the page draws the title bar.
         if (m.Msg == Native.WM_NCCALCSIZE && m.WParam != IntPtr.Zero) { m.Result = IntPtr.Zero; return; }
         base.WndProc(ref m);
+        if (m.Msg == Native.WM_WINDOWPOSCHANGED) shadow?.Follow();  // moved, sized, shown, hidden or restacked
     }
 
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
         ApplyFrame();
+        shadow ??= new MacShadow(this);
         Native.SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0, Native.SWP_FRAMECHANGED | Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOZORDER | Native.SWP_NOACTIVATE);
     }
 
-    // Mica (Windows 11 22H2 and later), dark title colours with the system, rounded corners.
+    // Nothing of Windows' own frame: no backdrop, no rounded corners, border or shadow from DWM
+    // (the page draws macOS's corners and edge, MacShadow the shadow).
     void ApplyFrame()
     {
         int dark = Machine.DarkMode() ? 1 : 0;
         Native.DwmSetWindowAttribute(Handle, Native.DWMWA_USE_IMMERSIVE_DARK_MODE, ref dark, 4);
-        int round = Native.DWMWCP_ROUND;
-        Native.DwmSetWindowAttribute(Handle, Native.DWMWA_WINDOW_CORNER_PREFERENCE, ref round, 4);
+        int square = Native.DWMWCP_DONOTROUND;
+        Native.DwmSetWindowAttribute(Handle, Native.DWMWA_WINDOW_CORNER_PREFERENCE, ref square, 4);
+        int noBorder = Native.DWMWA_COLOR_NONE;
+        Native.DwmSetWindowAttribute(Handle, Native.DWMWA_BORDER_COLOR, ref noBorder, 4);
+        int noFrame = Native.DWMNCRP_DISABLED;
+        Native.DwmSetWindowAttribute(Handle, Native.DWMWA_NCRENDERING_POLICY, ref noFrame, 4);
         mica = false;
-        if (Machine.MicaSupported)
-        {
-            int backdrop = Native.DWMSBT_MAINWINDOW;
-            mica = Native.DwmSetWindowAttribute(Handle, Native.DWMWA_SYSTEMBACKDROP_TYPE, ref backdrop, 4) == 0;
-            var margins = new Native.Margins { Left = -1, Right = -1, Top = -1, Bottom = -1 };
-            if (mica) mica = Native.DwmExtendFrameIntoClientArea(Handle, ref margins) == 0;
-        }
-        // Without Mica the page paints its own solid background; this only shows while it loads.
-        BackColor = mica ? Color.Black : dark == 1 ? Color.FromArgb(32, 32, 32) : Color.FromArgb(243, 243, 243);
+    }
+
+    // The page greys its traffic lights and title when the window isn't in front, as macOS does.
+    protected override void OnActivated(EventArgs e) { base.OnActivated(e); SetActive(true); }
+    protected override void OnDeactivate(EventArgs e) { base.OnDeactivate(e); SetActive(false); }
+    void SetActive(bool on)
+    {
+        shadow?.SetActive(on);
+        try { web?.CoreWebView2?.PostWebMessageAsJson(on ? "{\"type\":\"active\",\"on\":true}" : "{\"type\":\"active\",\"on\":false}"); } catch { }
     }
 
     protected override async void OnLoad(EventArgs e)
@@ -315,10 +327,10 @@ sealed class SetupWindow : Form
     void Dispatch(JsonElement m)
     {
         string cmd = m.TryGetProperty("cmd", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : "";
-        if (cmd != "startDrag" && cmd != "mirror") Log.Write("ui: " + cmd);
+        if (cmd != "startDrag" && cmd != "mirror" && cmd != "chrome") Log.Write("ui: " + cmd);
         switch (cmd)
         {
-            case "ready": wizard.Changed(); Post(); break;
+            case "ready": wizard.Changed(); Post(); SetActive(ActiveForm == this); break;
             case "shown": PageShown(); break;
             case "install": wizard.InstallNow(); break;
             case "elevate": wizard.Elevate(); break;
@@ -334,6 +346,9 @@ sealed class SetupWindow : Form
             case "finish": wizard.Finish(); Close(); break;
             case "close": Close(); break;
             case "minimize": WindowState = FormWindowState.Minimized; break;
+            case "chrome":  // the page's Mac point (CSS px), for the shadow
+                if (m.TryGetProperty("point", out var pt) && pt.ValueKind == JsonValueKind.Number) shadow?.SetPoint(pt.GetDouble(), DeviceDpi);
+                break;
             case "startDrag":  // fallback for pages that don't use app-region
                 Native.ReleaseCapture();
                 Native.SendMessage(Handle, Native.WM_NCLBUTTONDOWN, (IntPtr)Native.HTCAPTION, IntPtr.Zero);
@@ -449,6 +464,8 @@ sealed class SetupWindow : Form
     {
         SystemEvents.UserPreferenceChanged -= OnThemeChanged;
         poster.Stop();
+        shadow?.Dispose();
+        shadow = null;
         wizard.Shutdown();
         base.OnFormClosed(e);
     }
@@ -456,10 +473,12 @@ sealed class SetupWindow : Form
 
 static class Native
 {
-    public const int WM_NCCALCSIZE = 0x0083, WM_NCLBUTTONDOWN = 0x00A1, HTCAPTION = 2;
-    public const int WS_SYSMENU = 0x00080000, WS_MINIMIZEBOX = 0x00020000;
-    public const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20, DWMWA_WINDOW_CORNER_PREFERENCE = 33, DWMWA_SYSTEMBACKDROP_TYPE = 38;
-    public const int DWMWCP_ROUND = 2, DWMSBT_MAINWINDOW = 2;
+    public const int WM_NCCALCSIZE = 0x0083, WM_NCLBUTTONDOWN = 0x00A1, WM_WINDOWPOSCHANGED = 0x0047, HTCAPTION = 2;
+    public const int WS_SYSMENU = 0x00080000, WS_MINIMIZEBOX = 0x00020000, WS_EX_NOREDIRECTIONBITMAP = 0x00200000;
+    public const int DWMWA_NCRENDERING_POLICY = 2, DWMWA_USE_IMMERSIVE_DARK_MODE = 20, DWMWA_WINDOW_CORNER_PREFERENCE = 33,
+                     DWMWA_BORDER_COLOR = 34, DWMWA_SYSTEMBACKDROP_TYPE = 38;
+    public const int DWMNCRP_DISABLED = 1, DWMWCP_DONOTROUND = 1, DWMWCP_ROUND = 2, DWMSBT_MAINWINDOW = 2;
+    public const int DWMWA_COLOR_NONE = unchecked((int)0xFFFFFFFE);
     public const uint SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_NOZORDER = 0x4, SWP_NOACTIVATE = 0x10, SWP_FRAMECHANGED = 0x20;
 
     [StructLayout(LayoutKind.Sequential)] public struct Margins { public int Left, Right, Top, Bottom; }

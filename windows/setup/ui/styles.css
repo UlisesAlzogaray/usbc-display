@@ -1,6 +1,8 @@
-/* USB-C Display Setup: Windows 11 Fluent look over a Mica window.
-   html and body stay transparent so Mica shows through. The host adds
-   "no-mica" on <html> when Mica is not available. */
+/* USB-C Display Setup: a Mac window, on Windows from the start and on the Mac after the handover.
+   html and body stay transparent: #app is the window (its shape, colours, title bar, edge), so
+   outside its corners the desktop shows (the hosts give it a borderless, transparent canvas and
+   the shadow). Sizes of the window's own parts are in Mac points: --mpt is one point in CSS
+   pixels, set by app.js from the laptop's scale, so they come out as on the Mac's new screen. */
 
 /* Inter, bundled (fonts/Inter-OFL.txt): the same letters on the laptop and in the Mac's copy of
    this window (the handover when the picture starts), where Segoe UI and SF can't both go. */
@@ -37,7 +39,7 @@ html { font-optical-sizing: none; }
   --text-3: rgba(0, 0, 0, 0.45);
   --text-dis: rgba(0, 0, 0, 0.36);
 
-  --solid-bg: #f3f3f3;
+  --solid-bg: #f5f5f5;
   --layer: rgba(255, 255, 255, 0.5);
   --layer-stroke: rgba(0, 0, 0, 0.0578);
   --card: rgba(255, 255, 255, 0.7);
@@ -66,8 +68,17 @@ html { font-optical-sizing: none; }
   --pc: #0067c0;   --pc-bg: rgba(0, 103, 192, 0.10);
   --mac: #7a4dc9;  --mac-bg: rgba(122, 77, 201, 0.10);
 
-  --mica-sim: radial-gradient(120% 90% at 0% 0%, #e9eef8 0%, transparent 60%),
-              radial-gradient(90% 80% at 100% 100%, #f2ecf6 0%, transparent 60%), #f3f3f3;
+  /* The Mac window (macOS 27): content and sidebar, the title, the edge (0.5 pt outline, 1 pt
+     highlight inside) and the traffic lights' rims. */
+  --mpt: 0.8333px;
+  --win-main: #f5f5f5;
+  --win-side: #ebebeb;
+  --win-title: rgba(0, 0, 0, 0.85);
+  --win-title-off: rgba(0, 0, 0, 0.3);
+  --win-out: rgba(0, 0, 0, 0.22);
+  --win-hi: rgba(255, 255, 255, 0.55);
+  --tl-off: rgba(0, 0, 0, 0.1);
+  --tl-off-rim: rgba(0, 0, 0, 0.12);
 
   color-scheme: light;
 }
@@ -84,7 +95,7 @@ html { font-optical-sizing: none; }
   --text-3: rgba(255, 255, 255, 0.544);
   --text-dis: rgba(255, 255, 255, 0.363);
 
-  --solid-bg: #202020;
+  --solid-bg: #2e2e2e;
   --layer: rgba(58, 58, 58, 0.3);
   --layer-stroke: rgba(0, 0, 0, 0.1);
   --card: rgba(255, 255, 255, 0.0512);
@@ -111,8 +122,15 @@ html { font-optical-sizing: none; }
   --pc: #60b8ff;   --pc-bg: rgba(96, 184, 255, 0.13);
   --mac: #c3a3ff;  --mac-bg: rgba(195, 163, 255, 0.13);
 
-  --mica-sim: radial-gradient(120% 90% at 0% 0%, #232a36 0%, transparent 60%),
-              radial-gradient(90% 80% at 100% 100%, #2a2430 0%, transparent 60%), #202020;
+  /* Measured on macOS 27 (System Settings, without the wallpaper's tint). */
+  --win-main: #2e2e2e;
+  --win-side: #292929;
+  --win-title: rgba(255, 255, 255, 0.85);
+  --win-title-off: rgba(255, 255, 255, 0.3);
+  --win-out: rgba(0, 0, 0, 0.8);
+  --win-hi: rgba(255, 255, 255, 0.07);
+  --tl-off: rgba(235, 235, 235, 0.19);
+  --tl-off-rim: rgba(190, 190, 190, 0.75);
 
   color-scheme: dark;
 }
@@ -129,59 +147,100 @@ html, body {
   user-select: none;
   cursor: default;
 }
-html.no-mica body { background: var(--solid-bg); }
-html.preview body { background: var(--mica-sim); }
+html.preview { background: #6d7a8c; }  /* the preview harness: a stand-in desktop around the window */
 
 button { font: inherit; color: inherit; }
 a { color: var(--accent-text); }
 :focus-visible { outline: 2px solid var(--text-1); outline-offset: 2px; border-radius: var(--r-ctl); }
 
-/* ---------- Shell ---------- */
+/* ---------- Shell: the window ---------- */
 
+/* Its shape (16 pt corners with macOS's continuous curve) is a clip path app.js sets for the
+   window's size; the edge is drawn along the same path (.win-edge). The sidebar runs to the top,
+   under the traffic lights, as in macOS's own apps. */
 #app {
+  position: relative;
   height: 100%;
   display: grid;
   grid-template-columns: 228px 1fr;
-  grid-template-rows: 40px 1fr;
-  grid-template-areas: "title title" "rail main";
+  grid-template-rows: calc(52 * var(--mpt)) 1fr;
+  grid-template-areas: "rail title" "rail main";
+  background: var(--win-main);
 }
 
 .titlebar {
   grid-area: title;
   display: flex; align-items: center;
-  height: 40px; padding-left: 16px;
+  padding: 0 28px;
   -webkit-app-region: drag;
   app-region: drag;
 }
-.titlebar .app-icon { width: 18px; height: 18px; flex: none; }
-.titlebar .app-name { margin-left: 12px; font-size: 12px; line-height: 16px; color: var(--text-1); }
-.titlebar .app-name span { color: var(--text-3); margin-left: 6px; }
-.titlebar .spacer { flex: 1; }
-.caption {
-  -webkit-app-region: no-drag; app-region: no-drag;
-  width: 46px; height: 40px; border: 0; background: transparent;
-  display: grid; place-items: center; color: var(--text-1);
-  transition: background var(--dur-1) linear;
+.win-title {
+  font-size: calc(15 * var(--mpt)); line-height: 1; font-weight: 600; letter-spacing: -0.01em;
+  color: var(--win-title);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: color var(--dur-2) linear;
 }
-.caption svg { width: 10px; height: 10px; }
-.caption:hover { background: var(--subtle-hover); }
-.caption:active { background: var(--subtle-press); color: var(--text-2); }
-.caption.close:hover { background: #c42b1c; color: #fff; }
-.caption.close:active { background: #c84031; color: rgba(255,255,255,.7); }
+/* The sidebar's top, beside the lights, moves the window too. */
+.drag-strip {
+  position: absolute; left: 0; top: 0; width: 228px; height: calc(52 * var(--mpt));
+  -webkit-app-region: drag; app-region: drag;
+}
+html.inactive .win-title { color: var(--win-title-off); }
 
-/* The Mac's copy of this window: everything the same, but macOS's own buttons (drawn by the Mac
-   app) top left instead of Windows' top right. */
-html.mac-window .caption { display: none; }
-/* macOS's dark window material comes out about a quarter brighter than Windows' Mica (measured:
-   #322C2A against #251E1E in the rail): the same darkness, each tinted by its own wallpaper. */
-html.mac-window[data-theme="dark"] body { background: rgba(0, 0, 0, 0.26); }
-html.mac-window .titlebar { padding-left: 84px; -webkit-app-region: no-drag; app-region: no-drag; }
+/* Traffic lights, as macOS 27 draws them (measured, 2x): 14 pt glass circles 9 pt apart, 19 pt
+   in from the corner, a bright rim top and bottom; the symbols show while the pointer is over
+   any of them. Zoom is off (this window has one size), as on a Mac. Grey when the window isn't
+   in front. */
+.lights {
+  position: absolute; z-index: 20;
+  left: calc(19 * var(--mpt)); top: calc(19 * var(--mpt));
+  display: flex; gap: calc(9 * var(--mpt));
+  -webkit-app-region: no-drag; app-region: no-drag;
+}
+.tl {
+  position: relative; width: calc(14 * var(--mpt)); height: calc(14 * var(--mpt));
+  padding: 0; border: 0; border-radius: 50%;
+  background: var(--tl-fill);
+  box-shadow: inset 0 calc(0.5 * var(--mpt)) 0 var(--tl-rim-top), inset 0 calc(-0.5 * var(--mpt)) 0 var(--tl-rim-bottom), 0 0 0 calc(0.25 * var(--mpt)) var(--tl-ring);
+  display: grid; place-items: center;
+  cursor: default;
+  -webkit-app-region: no-drag; app-region: no-drag;
+}
+.tl:focus-visible { outline: none; box-shadow: 0 0 0 calc(2 * var(--mpt)) var(--accent); }
+.tl svg { width: 100%; height: 100%; opacity: 0; }
+.tl svg path { fill: none; stroke: var(--tl-glyph); stroke-width: 1.15; stroke-linecap: round; }
+.tl svg path.fill { fill: var(--tl-glyph); stroke: none; }
+.lights:hover .tl:not(:disabled) svg { opacity: 1; }
+.tl:not(:disabled):active { filter: brightness(0.82); }
+.tl.close {
+  --tl-fill: linear-gradient(180deg, #fc7a70 0%, #f9665b 12%, #f55046 40%, #f25e55 70%, #ef6961 100%);
+  --tl-rim-top: #ffcbbf; --tl-rim-bottom: #ff9890; --tl-ring: rgba(150, 20, 10, 0.25); --tl-glyph: rgba(77, 0, 0, 0.72);
+}
+.tl.min {
+  --tl-fill: linear-gradient(180deg, #ffdc43 0%, #fbb500 12%, #fbb200 35%, #fdc000 60%, #fece30 100%);
+  --tl-rim-top: #ffff6e; --tl-rim-bottom: #fff256; --tl-ring: rgba(150, 90, 0, 0.25); --tl-glyph: rgba(130, 75, 0, 0.75);
+}
+.tl.zoom, .tl:disabled {
+  --tl-fill: var(--tl-off); --tl-rim-top: var(--tl-off-rim); --tl-rim-bottom: var(--tl-off-rim); --tl-ring: transparent;
+}
+html.inactive .lights:not(:hover) .tl { --tl-fill: var(--tl-off); --tl-rim-top: var(--tl-off-rim); --tl-rim-bottom: var(--tl-off-rim); --tl-ring: transparent; }
+:root[data-theme="light"] .tl.close { --tl-ring: rgba(194, 0, 0, 0.45); }
+:root[data-theme="light"] .tl.min { --tl-ring: rgba(170, 100, 0, 0.45); }
+
+/* The edge: a 0.5 pt outline and a 1 pt highlight inside it (paths set by app.js; each stroke is
+   centred on the shape and half of it is clipped away). */
+.win-edge { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 30; overflow: visible; }
+.win-edge path { fill: none; }
+.win-edge .out { stroke: var(--win-out); }
+.win-edge .hi { stroke: var(--win-hi); }
 
 /* ---------- Rail: the journey in two lanes ---------- */
 
 .rail {
   grid-area: rail;
-  padding: 2px 8px 12px 12px;
+  padding: calc(52 * var(--mpt) + 2px) 8px 12px 12px;
+  background: var(--win-side);
   display: flex; flex-direction: column;
   min-height: 0; overflow: hidden;
 }
@@ -213,14 +272,14 @@ html.mac-window .titlebar { padding-left: 84px; -webkit-app-region: no-drag; app
 }
 .step-row .node {
   position: absolute; top: 50%; width: 12px; height: 12px; margin-top: -6px;
-  border-radius: 50%; border: 1.5px solid currentColor; background: var(--solid-bg);
+  border-radius: 50%; border: 1.5px solid currentColor; background: var(--win-side);
   display: grid; place-items: center;
 }
 .step-row.pc .node { left: 9px; color: var(--pc); }
 .step-row.mac .node { left: 31px; color: var(--mac); }
 .step-row .label { margin-left: 54px; overflow: hidden; text-overflow: ellipsis; }
 .step-row.done .node { background: currentColor; }
-.step-row.done .node svg { width: 8px; height: 8px; color: var(--solid-bg); stroke-width: 2; }
+.step-row.done .node svg { width: 8px; height: 8px; color: var(--win-side); stroke-width: 2; }
 .step-row.done .label, .step-row.todo .label { color: var(--text-2); }
 .step-row.na .label { color: var(--text-dis); }
 .step-row.na .node { opacity: 0.4; border-style: dashed; }
@@ -244,14 +303,9 @@ html.mac-window .titlebar { padding-left: 84px; -webkit-app-region: no-drag; app
 .main {
   grid-area: main;
   min-width: 0; min-height: 0;
-  background: var(--layer);
-  border: 1px solid var(--layer-stroke);
-  border-right: 0; border-bottom: 0;
-  border-top-left-radius: var(--r-card);
   display: grid;
   grid-template-rows: 1fr auto;
 }
-html.no-mica .main { background: color-mix(in srgb, var(--solid-bg) 70%, var(--card)); }
 
 /* The aside runs the full height beside the heading and the picture. */
 .content {
@@ -626,8 +680,8 @@ html.no-mica .main { background: color-mix(in srgb, var(--solid-bg) 70%, var(--c
    next to the "where" chip shows progress instead. */
 @media (max-width: 880px) {
   #app { grid-template-columns: minmax(0, 1fr); grid-template-areas: "title" "main"; }
-  .rail { display: none; }
-  .main { border-left: 0; border-top-left-radius: 0; }
+  .rail, .drag-strip { display: none; }
+  .titlebar { padding-left: calc(90 * var(--mpt)); }
   .strip { display: flex; gap: 2px; }
   .strip i { width: 8px; }
   .strip i.current { width: 14px; }

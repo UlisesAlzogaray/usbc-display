@@ -2011,6 +2011,7 @@ static CGDirectDisplayID gSetupDisplay;
 static NSWindow *gSetupWindow; // the rest: main thread only
 static WKWebView *gSetupWeb;
 static NSString *gSetupMirror;
+static NSArray *gSetupObservers;
 static BOOL gSetupLoaded;
 
 static void sendClick(NSString *json) {
@@ -2027,7 +2028,15 @@ static void sendClick(NSString *json) {
 
 static void deliverMirror(void) {
     if (gSetupWeb && gSetupLoaded && gSetupMirror)
-        [gSetupWeb evaluateJavaScript:[NSString stringWithFormat:@"window.usbcDeliver(%@)", gSetupMirror] completionHandler:nil];
+        [gSetupWeb evaluateJavaScript:[NSString stringWithFormat:@"window.usbcDeliver(%@)", gSetupMirror] completionHandler:^(id r, NSError *e) {
+            [gSetupWindow invalidateShadow];  // its shape or look may have changed
+        }];
+}
+
+// This window's own state (not the laptop's): in front or not.
+static void setupActive(BOOL on) {
+    if (gSetupWeb && gSetupLoaded)
+        [gSetupWeb evaluateJavaScript:on ? @"window.usbcDeliver({type:'active',on:true})" : @"window.usbcDeliver({type:'active',on:false})" completionHandler:nil];
 }
 
 // Once the page is drawn, the frames that show it go out within a few refreshes: then the
@@ -2050,7 +2059,8 @@ static void windowReadyLater(int tries) {
 - (void)userContentController:(WKUserContentController *)u didReceiveScriptMessage:(WKScriptMessage *)m {
     NSDictionary *msg = [m.body isKindOfClass:NSDictionary.class] ? m.body : nil;
     NSString *cmd = msg[@"cmd"];
-    if ([cmd isEqualToString:@"drawn"]) windowReadyLater(20);
+    if ([cmd isEqualToString:@"drawn"]) { [gSetupWindow invalidateShadow]; windowReadyLater(20); }
+    else if ([cmd isEqualToString:@"minimize"]) [gSetupWindow miniaturize:nil];
     else if ([cmd isEqualToString:@"act"]) {
         NSData *d = [NSJSONSerialization dataWithJSONObject:msg options:0 error:nil];
         if (d) sendClick([[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding]);
@@ -2059,14 +2069,16 @@ static void windowReadyLater(int tries) {
 - (void)webView:(WKWebView *)w didFinishNavigation:(WKNavigation *)n {
     gSetupLoaded = YES;
     deliverMirror();
+    setupActive(gSetupWindow.isKeyWindow);
 }
-- (void)close:(id)sender { sendClick(@"{\"cmd\":\"act\",\"act\":\"close\",\"data\":{}}"); }
 @end
 static SetupBridge *gSetupBridge;
 
 static void closeSetupWindow(void) {
     if (!gSetupWindow) { releasePanelColour(); return; }
     [gSetupWindow orderOut:nil];
+    for (id o in gSetupObservers) [NSNotificationCenter.defaultCenter removeObserver:o];
+    gSetupObservers = nil;
     [gSetupWeb.configuration.userContentController removeScriptMessageHandlerForName:@"usbc"];
     gSetupWindow = nil;
     gSetupWeb = nil;
@@ -2084,7 +2096,7 @@ static NSString *const kSetupShim =
      "    postMessage: function (m) { window.webkit.messageHandlers.usbc.postMessage(m); },"
      "    addEventListener: function (t, fn) { if (t === 'message') listeners.push(fn); } } };"
      "  window.usbcDeliver = function (data) { listeners.forEach(function (fn) { fn({ data: data }); }); };"
-     "  window.usbcHost = { mica: true, dark: true, windowsBuild: 0, appRegion: false, resumed: false, mac: true };"
+     "  window.usbcHost = { mica: false, dark: true, windowsBuild: 0, appRegion: false, resumed: false, mac: true };"
      "})();";
 
 static void setupMirror(NSString *json);
@@ -2115,56 +2127,35 @@ static void openSetupWindow(int tries) {
         NSRect frame = NSMakeRect(sf.origin.x + left, NSMaxY(sf) - bottom, right - left, bottom - top);
         double zoom = dpi / 100.0 / f;
         if (!gSetupWindow) {
-            KeyableWindow *win = [[KeyableWindow alloc] initWithContentRect:frame styleMask:NSWindowStyleMaskBorderless
-                                                                    backing:NSBackingStoreBuffered defer:NO];
+            // The page is the whole window, as on the laptop: a Mac window's corners, edge, title
+            // bar and traffic lights, drawn on a transparent canvas. macOS draws the shadow from
+            // its shape (invalidateShadow once it's drawn). Miniaturizable: the page's yellow
+            // button puts it in the Dock.
+            KeyableWindow *win = [[KeyableWindow alloc] initWithContentRect:frame
+                styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskMiniaturizable backing:NSBackingStoreBuffered defer:NO];
             win.releasedWhenClosed = NO;
             win.opaque = NO;
             win.backgroundColor = NSColor.clearColor;
             win.hasShadow = YES;
-            // macOS's own window material where Windows had Mica: the wallpaper, blurred and
-            // tinted, behind a page that is transparent in the same places.
-            NSVisualEffectView *glass = [[NSVisualEffectView alloc] initWithFrame:NSMakeRect(0, 0, frame.size.width, frame.size.height)];
-            glass.material = NSVisualEffectMaterialWindowBackground;
-            glass.blendingMode = NSVisualEffectBlendingModeBehindWindow;
-            glass.state = NSVisualEffectStateActive;
-            CGFloat r = 8 * dpi / 100.0 / f;  // Windows 11's 8 px corners, in points
-            NSImage *mask = [NSImage imageWithSize:NSMakeSize(2 * r + 1, 2 * r + 1) flipped:NO drawingHandler:^BOOL(NSRect rect) {
-                [NSColor.blackColor setFill];
-                [[NSBezierPath bezierPathWithRoundedRect:rect xRadius:r yRadius:r] fill];
-                return YES;
-            }];
-            mask.capInsets = NSEdgeInsetsMake(r, r, r, r);
-            mask.resizingMode = NSImageResizingModeStretch;
-            glass.maskImage = mask;
-            win.contentView = glass;
 
             if (!gSetupBridge) gSetupBridge = [SetupBridge new];
             WKWebViewConfiguration *cfg = [WKWebViewConfiguration new];
             [cfg.userContentController addScriptMessageHandler:gSetupBridge name:@"usbc"];
             [cfg.userContentController addUserScript:[[WKUserScript alloc] initWithSource:kSetupShim
                 injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:YES]];
-            WKWebView *web = [[WKWebView alloc] initWithFrame:glass.bounds configuration:cfg];
+            WKWebView *web = [[WKWebView alloc] initWithFrame:NSMakeRect(0, 0, frame.size.width, frame.size.height) configuration:cfg];
             [web setValue:@NO forKey:@"drawsBackground"];
             web.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
             web.navigationDelegate = gSetupBridge;
-            web.wantsLayer = YES;
-            web.layer.cornerRadius = r;
-            web.layer.masksToBounds = YES;
-            [glass addSubview:web];
+            win.contentView = web;
+            // Its traffic lights and title go grey when it isn't in front, as macOS's do.
+            NSMutableArray *observers = [NSMutableArray array];
+            for (NSNotificationName n in @[ NSWindowDidBecomeKeyNotification, NSWindowDidResignKeyNotification ])
+                [observers addObject:[NSNotificationCenter.defaultCenter addObserverForName:n object:win queue:nil usingBlock:^(NSNotification *note) {
+                    setupActive([note.name isEqualToString:NSWindowDidBecomeKeyNotification]);
+                }]];
+            gSetupObservers = observers;
 
-            // macOS's own buttons, top left, centred on the page's 40 px title bar. Close acts
-            // like the page's own close button; the others are off, as on Windows.
-            NSWindowButton kinds[3] = { NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton };
-            CGFloat titleMid = frame.size.height - 20 * zoom;
-            for (int i = 0; i < 3; i++) {
-                NSButton *b = [NSWindow standardWindowButton:kinds[i] forStyleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable];
-                if (!b) continue;
-                NSSize s = b.frame.size;
-                [b setFrameOrigin:NSMakePoint(round(14 * zoom + i * (s.width + 8) ), round(titleMid - s.height / 2))];
-                b.autoresizingMask = NSViewMaxXMargin | NSViewMinYMargin;
-                if (i == 0) { b.target = gSetupBridge; b.action = @selector(close:); } else b.enabled = NO;
-                [glass addSubview:b];
-            }
             NSURL *index = [NSBundle.mainBundle URLForResource:@"index" withExtension:@"html" subdirectory:@"setup-ui"];
             if (!index) { printf("Setup window: this build has no setup-ui.\n"); return; }
             [web loadFileURL:index allowingReadAccessToURL:index.URLByDeletingLastPathComponent];

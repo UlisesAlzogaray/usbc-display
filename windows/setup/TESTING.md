@@ -42,9 +42,12 @@ what you actually saw when it differs (exact dialog text, button names, timings)
 - [ ] SmartScreen: does "Windows protected your PC" appear? Is "Run anyway" there?
 - [ ] Smart App Control: if it's on, does it block the unsigned exe with no way through?
 - [ ] No WebView2 runtime (Windows 10 or a stripped image only): the message box offers the download.
-- [ ] The window opens: Mica shows through the page on Windows 11 22H2 or later, solid colour
-      on older builds. No white flash.
-- [ ] Only our own minimize and close buttons. No faint system caption buttons behind them.
+- [x] The window opens as a Mac window: traffic lights top left (close, minimize, zoom off),
+      16 pt continuous corners with the desktop showing outside them, the edge, a Mac-shaped
+      shadow that follows the window and hides when it's minimized. No white flash (Oct 2026).
+- [x] The lights show their symbols on hover and go grey with the title when the window isn't
+      in front; light and dark mode (Oct 2026, previewed).
+- [ ] Windows 10: the transparent corners and the shadow (DWM corner and border settings don't exist there).
 - [ ] Dragging the top bar moves the window. Snap still works (Win + arrows, drag to the edge).
       Alt + F4 closes it, also with the focus inside the page.
 - [ ] Text is Segoe UI Variable. Light and dark mode follow Windows. Accent colour matches Settings.
@@ -164,7 +167,9 @@ flags copied onto the test copy (`01c3` on the folder, `00c3`/`0083` inside):
 
 ### 14. First picture and Try it out
 - [ ] "Show my Mac's screen" goes full screen on the laptop with the Mac's wallpaper.
-- [x] The handover (Mac app 4): the window stays put and only the background changes. Measured
+- [x] The handover (Mac app 4): the window stays put and only the background changes. Since the
+      laptop's window became a Mac window too, the traffic lights, corners and title bar are the
+      same on both sides of the cut (within half a pixel; colours within 1 level). Measured
       with a 20 fps recording of the laptop (Oct 2026, 150 % on the laptop, 1.25 px a point on
       the Mac): one frame from Windows to the Mac, same step and footer, macOS's buttons top left,
       text within about 1 px, colours the same (the panel profile waits until the window closes).
@@ -207,7 +212,7 @@ Each of these was assumed, not tested. Write down the answer.
 - [ ] Whether `usbc.local` is answered and resolved (our own responder on UDP 5353, cable only).
 - [ ] Whether the built-in Windows "mDNS (UDP-In)" Public rule is on.
 - [ ] Whether port 80 is free with http.sys.
-- [ ] Transparent WebView2 over Mica.
+- [x] Transparent WebView2 on a window without a redirection surface: its alpha reaches the desktop.
 - [ ] Quit & Reopen behaviour with the login agent.
 - [ ] Smart App Control behaviour for an unsigned setup exe.
 - [ ] Which Windows builds and vendors expose the USB4 P2P network adapter.
