@@ -74,8 +74,8 @@
   let S = merge(DEFAULTS);
   let haveState = false;
 
-  // The local place (§2.3). Mirrored to the Mac's copy: screen, sub, sheet, cut, cutCheck, settled
-  // (and input, the keyboard row frozen at startScreen). The rest is this copy's own.
+  // The local place (§2.3). Mirrored to the Mac's copy: screen, sub, sheet, cut, cutCheck, settled,
+  // stepsDone (and input, the keyboard row frozen at startScreen). The rest is this copy's own.
   const L = {
     screen: '', sub: '', sheet: '', cut: false, cutCheck: false, settled: false, input: undefined,
     look: { theme: 'light', accent: 'blue' }, active: true, enteredAt: 0,
@@ -83,6 +83,7 @@
     appSeen: false, wasLinked: false, starting: false, autoStarted: false, shownOnce: false, manual: false, backSince: 0,
     refusedOff: false,       // the receiver was refused while Screen Recording was off (act, readySub)
     promptSeen: {},          // the Mac's permission prompt was up on its screen: { screen, accessibility } (permSub)
+    stepsDone: 0,            // open-app steps: the rows the page has shown to be done (observe; latched)
   };
   const force = { theme: P('theme') || '', accent: P('accent') || '', mpt: '' };   // ?theme= ?accent= ?mpt= (preview)
   L.look = computeLook(S);
@@ -135,7 +136,7 @@
     S = merge(DEFAULTS, msg.state || {});
     haveState = true;
     const lo = msg.local || {};
-    ['screen', 'sub', 'sheet', 'cut', 'cutCheck', 'settled', 'input'].forEach((k) => { if (k in lo) L[k] = lo[k]; });
+    ['screen', 'sub', 'sheet', 'cut', 'cutCheck', 'settled', 'input', 'stepsDone'].forEach((k) => { if (k in lo) L[k] = lo[k]; });
     const look = msg.look || {};
     L.look = { theme: look.theme === 'dark' ? 'dark' : 'light', accent: ACCENTS.indexOf(look.accent) >= 0 ? look.accent : 'blue' };
     mirroredActive = look.active !== false;
@@ -418,7 +419,7 @@
   let mirrorSent = '';
   function sendMirror() {
     if (mirrored || !host) return;
-    const local = { screen: L.screen, sub: L.sub, sheet: L.sheet, cut: L.cut, cutCheck: L.cutCheck, settled: L.settled };
+    const local = { screen: L.screen, sub: L.sub, sheet: L.sheet, cut: L.cut, cutCheck: L.cutCheck, settled: L.settled, stepsDone: L.stepsDone };
     if (typeof L.input === 'boolean') local.input = L.input;
     const look = { theme: root.dataset.theme, accent: root.dataset.accent, active: !!L.active, style: root.getAttribute('style') || '' };
     const j = JSON.stringify({ local, look });
@@ -535,17 +536,20 @@
       renderStatus(null, true, true, []);
       syncButtons(buttonsEl, [], 0);
       syncThird(null, 0);
+      syncHelp('', 0);
     } else {
       if (screenChanged) newScreen(v, first);
       else updateScreen(v);
       const fadeIn = first ? 0 : screenChanged ? 250 : 200;
       syncButtons(buttonsEl, [v.secondary && ['secondary', v.secondary], v.primary && ['primary', v.primary]].filter(Boolean), fadeIn);
       syncThird(v.third, fadeIn);
+      syncHelp(v.primary || v.secondary ? '' : v.help, fadeIn);
       renderStatus(v.third ? null : v.status, screenChanged, first, v.completed || []);
       drawn = true;
     }
     renderSheet();
     cur = v;
+    syncSteps();
   }
 
   // The window's theme and accent change only at a screen change, inside its crossfade (§6.4): the
@@ -631,6 +635,15 @@
         return '<div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + Math.round((c.value || 0) * 100) + '"><i style="width:' + ((c.value || 0) * 100).toFixed(2) + '%"></i></div>' +
           (c.label ? '<p class="caption t-body prog-label">' + esc(c.label) + '</p>' : '');
       }
+      if (c.type === 'steps') {
+        // A numbered list (role list: WebKit drops a list's role without its markers). Done rows
+        // carry a check instead of their numeral; the current row is set by syncSteps().
+        return '<ol class="steps t-lead" role="list" data-done="' + (c.done || 0) + '">' + c.rows.map((r, i) => {
+          const done = i < (c.done || 0);
+          return '<li data-row="' + (i + 1) + '"' + (done ? ' class="done"' : '') + '><span class="step-mark' + (done ? ' step-check' : '') + '" aria-hidden="true">' +
+            (done ? STEP_CHECK : String(i + 1)) + '</span><span class="step-tx">' + r + '</span></li>';
+        }).join('') + '</ol>';
+      }
       if (c.type === 'list') {
         return '<div class="obk-list">' + c.items.map((it) => '<div class="obk-item"><span class="obk-ic" aria-hidden="true">' +
           ((call('D.listGlyph', D.listGlyph, [it.glyph])) || '') + '</span><div class="obk-tx"><b class="t-body-sb">' + it.title + '</b><span class="t-body">' + it.text + '</span></div></div>').join('') + '</div>';
@@ -638,6 +651,7 @@
       return '';
     }).join('');
   }
+  const STEP_CHECK = '<svg viewBox="0 0 18 18" aria-hidden="true"><path d="M5.4 9.4l2.4 2.4 4.9-5.3"/></svg>';
   // What the content shows, without the progress value (that moves in place).
   const contentKey = (v) => JSON.stringify((v.content || []).map((c) => (c.type === 'progress' ? { type: 'progress', l: !!c.label } : c))) + '@' + v.contentTop;
 
@@ -693,7 +707,7 @@
     const key = v.scene.name + '|' + JSON.stringify(v.scene.opts);
     const prev = sceneNow && sceneNow.band === band ? sceneNow : null;
     if (prev && prev.key === key) return;
-    const sc = call('D.scenes.mac', D.scenes && D.scenes.mac, [v.scene.name, v.scene.opts]);
+    const sc = sceneFor(v.scene);
     const canvas = div('band-canvas');
     canvas.innerHTML = (sc && sc.html) || '';
     if (prev) band.insertBefore(canvas, prev.el); else band.appendChild(canvas);
@@ -702,7 +716,7 @@
     const land = prev ? (instant ? 0 : pan ? 900 : 440) : enterMs;
     const t0 = document.timeline ? document.timeline.currentTime + land + (instant ? 0 : 1000) : undefined;
     const anims = (sc && sc.tl && call('D.playScene', D.playScene, [canvas, sc.tl, t0])) || [];
-    freeze(anims, sc, v.scene.opts);
+    freeze(anims, sc, v.scene.opts, 0);
     // The loop measured its targets (pointer, halo, ring) with the text as laid out now. Before
     // the web font has loaded (a copy that opens on a picture), that layout changes: measure again.
     if (sc && sc.tl && document.fonts && document.fonts.status !== 'loaded') {
@@ -711,7 +725,7 @@
         if (!now || now.el !== canvas) return;
         now.anims.forEach((a) => { try { a.cancel(); } catch (e) { /* gone */ } });
         now.anims = call('D.playScene', D.playScene, [canvas, sc.tl, t0]) || [];
-        freeze(now.anims, sc, v.scene.opts);
+        freeze(now.anims, sc, v.scene.opts, now.still || 0);
       });
     }
     if (prev) {
@@ -727,14 +741,105 @@
       if (instant) done();
       else fade(old.el, 1, 0, 440, pan ? { delay: 90, easing: 'linear' } : { easing: FADE }).then(done);
     }
-    sceneNow = { key, sc, el: canvas, anims, band };
+    sceneNow = { key, sc, el: canvas, anims, band, still: 0 };
+    if (stepping(sc, v.scene.opts)) { const sn = sceneNow; setTimeout(() => stepStill(sn), STILL_MS); }
   }
-  // Hold the loop at one frame: ?f= for shots, the poster for reduced motion, shots and still scenes.
-  function freeze(anims, sc, opts) {
+  // Reduced motion (§6.3: crossfades only): a story doesn't hold one frame. It steps through its
+  // stills (tl.stills: one per click, the pointer resting on what to click), each held 5 s, the
+  // next dissolving in over it (300 ms) on a second copy of the picture. The rows follow the frame
+  // shown (storyRow reads the copy on screen).
+  const STILL_MS = 5000;
+  function stepping(sc, opts) {
+    const f = P('f');
+    return !!(reduced.matches && !shot && !instant && (f === null || f === '') && !(opts && opts.still)
+      && sc && sc.tl && sc.tl.stillAt == null && Array.isArray(sc.tl.stills) && sc.tl.stills.length > 1);
+  }
+  function stepStill(sn) {
+    if (sceneNow !== sn || !sn.el.isConnected || !reduced.matches) return;
+    const sc = sn.sc, i = (sn.still + 1) % sc.tl.stills.length;
+    // Only the copy on screen stays under the new one (a dissolve that never finished, in a hidden
+    // window, leaves nothing behind).
+    Array.from(sn.band.querySelectorAll('.band-canvas')).forEach((c) => { if (c !== sn.el) c.remove(); });
+    const canvas = div('band-canvas');
+    canvas.innerHTML = sc.html || '';
+    sn.band.appendChild(canvas);
+    const anims = call('D.playScene', D.playScene, [canvas, sc.tl]) || [];
+    const old = { el: sn.el, anims: sn.anims };
+    sn.el = canvas; sn.anims = anims; sn.still = i;
+    freeze(anims, sc, null, i);
+    // The dissolve ends when it has played, or after 400 ms whatever the window's frames do.
+    const fa = canvas.animate ? canvas.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 300, easing: FADE }) : null;
+    let ended = false;
+    const end = () => {
+      if (ended) return;
+      ended = true;
+      if (fa) fa.cancel();
+      old.anims.forEach((a) => { try { a.cancel(); } catch (e) { /* gone */ } });
+      old.el.remove();
+    };
+    if (fa) fa.finished.then(end, () => {});
+    setTimeout(end, 400);
+    setTimeout(() => stepStill(sn), STILL_MS);
+  }
+  // A picture for the band. The open-app story plays from the first chapter of the first row not
+  // yet done (opt.fromChapter, 0-based in tl.chapters). Should the scene still play a chapter of a
+  // done row (it counted fromChapter from 1), it is asked once more for the chapter after.
+  function sceneFor(want) {
+    const mac = D.scenes && D.scenes.mac;
+    const sc = call('D.scenes.mac', mac, [want.name, want.opts]);
+    const row = +want.fromRow || 0, from = want.opts && want.opts.fromChapter;
+    const rows = (s) => (s && s.tl && Array.isArray(s.tl.chapters) ? s.tl.chapters.filter((c) => c && +c.end > +c.start).map((c) => +c.row) : null);
+    const early = (s) => rows(s).some((r) => r < row);
+    if (!row || typeof from !== 'number' || !rows(sc) || !early(sc)) return sc;
+    const alt = call('D.scenes.mac', mac, [want.name, Object.assign({}, want.opts, { fromChapter: from + 1 })]);
+    return rows(alt) && rows(alt).some((r) => r >= row) && !early(alt) ? alt : sc;
+  }
+
+  // ---------- The numbered steps under the story (open-app) ----------
+  // The row whose chapter the picture is showing is the current one (the label colour, the
+  // accent marker): read from the running loop's time and tl.chapters ({row, start, end} as
+  // fractions of the loop). A done row is never current. No chapters (an older scene, the Mac's
+  // copy, which has no picture): no row is current.
+  function storyRow() {
+    const sn = sceneNow, sc = D.scenes || {};
+    const tl = sn && sn.el && sn.el.isConnected && sn.sc && sn.sc.tl;
+    const ch = tl && Array.isArray(tl.chapters) ? tl.chapters : [];
+    const a = sn && sn.anims && sn.anims[0];
+    if (!ch.length || !a || a.currentTime == null) return 0;
+    // The loop's own time (playScene, freeze), then the chapter begun last: scenes.js's helpers
+    // when it has them, the same sums here when it doesn't.
+    let f = typeof sc.loopFrac === 'function' ? sc.loopFrac(sn.anims, tl) : null;
+    if (f == null) { f = (a.currentTime - (a._shift || 0)) / (tl.dur || 6000); f = f <= 0 ? 0 : f % 1; }
+    let i = typeof sc.chapterAt === 'function' ? sc.chapterAt(tl, f) : -1;
+    if (typeof sc.chapterAt !== 'function') ch.forEach((c, j) => { if (c && +c.end > +c.start && (+c.start <= f + 1e-6 || i < 0)) i = j; });
+    // The loop's short way back to its start (after the last chapter's end) shows no row as current.
+    if (i >= 0 && ch[i] && f > +ch[i].end + 1e-6) i = -1;
+    return i >= 0 && ch[i] ? +ch[i].row || 0 : 0;
+  }
+  let stepsTimer = 0;
+  function syncSteps() {
+    const ol = scrEl && scrEl.querySelector('.content .steps');
+    if (!ol) { if (stepsTimer) { clearInterval(stepsTimer); stepsTimer = 0; } return; }
+    if (!stepsTimer) stepsTimer = setInterval(syncSteps, 100);
+    const done = +ol.dataset.done || 0;
+    let row = storyRow();
+    if (row <= done) row = 0;
+    ol.querySelectorAll('li').forEach((li) => {
+      const on = +li.dataset.row === row;
+      if (li.classList.contains('current') === on) return;
+      li.classList.toggle('current', on);
+      if (on) li.setAttribute('aria-current', 'step'); else li.removeAttribute('aria-current');
+    });
+  }
+
+  // Hold the loop at one frame: ?f= for shots; with reduced motion a story's still i (stepStill), or
+  // the poster; the poster for shots and still scenes.
+  function freeze(anims, sc, opts, i) {
     if (!sc || !anims || !anims.length) return;
     let frac = null;
     const f = P('f');
     if (f !== null && f !== '') frac = Number(f);
+    else if (stepping(sc, opts)) frac = sc.tl.stills[(i || 0) % sc.tl.stills.length];
     else if (reduced.matches || shot || (opts && opts.still)) frac = sc.poster != null ? sc.poster : 0;
     if (frac === null) return;
     const dur = (sc.tl && sc.tl.dur) || 1000;
@@ -778,6 +883,22 @@
     n.dataset.role = 'third';
     if (e) slotEl.replaceChild(n, e);
     else { slotEl.appendChild(n); if (fadeMs) fade(n, 0, 1, fadeMs, { fill: 'none' }); }
+  }
+  // The help button (?): a 20 pt round button in the tray's right corner, on a screen with no push
+  // buttons there and no room for a Learn More… link (open-app steps). It opens that screen's sheet.
+  function syncHelp(sheet, fadeMs) {
+    const tray = buttonsEl.parentNode;
+    let e = tray.querySelector('.btn-help');
+    if (e && (!sheet || e.dataset.sheet !== sheet)) { e.remove(); e = null; }
+    if (!sheet || e) return;
+    e = document.createElement('button');
+    e.className = 'btn btn-help';
+    e.textContent = '?';
+    e.dataset.act = 'help';
+    e.dataset.sheet = sheet;
+    e.setAttribute('aria-label', T('common.help') || 'Help');
+    tray.appendChild(e);
+    if (fadeMs) fade(e, 0, 1, fadeMs, { fill: 'none' });
   }
 
   // ---------- Status line (§4.5) ----------
@@ -886,6 +1007,7 @@
       acct: P('acct') || '', signed: P('signed') === '1', notarized: P('notarized') === '1', update: P('update') === '1',
       input: P('input') === '1' ? true : P('input') === '0' ? false : undefined, edge: P('edge') || '', pointer: P('pointer') === '1',
       theme: P('theme') || '', accent: P('accent') || '', sheet: P('sheet') || '',
+      settings: P('settings') === '1',
     };
   }
   // A plausible snapshot for one frame, when preview/mock.js has none to give.
@@ -954,6 +1076,8 @@
     if (f.input === false) { s.mac.status.axOk = false; s.setup.axChoice = 'no'; }
     if (f.edge) s.mac.status.displaySide = f.edge === 'unknown' ? '' : f.edge;
     if (f.pointer) s.screen.pointerOnLaptop = true;
+    // ?settings=1 (open-app): the page reported Open Privacy & Security, System Settings is in front.
+    if (f.settings) { s.server.settingsOpened = true; s.server.leftForSettings = true; s.server.pageFocused = false; s.server.pageBlurs = Math.max(2, s.server.pageBlurs); }
     return s;
   }
   function stateFor(scr, sub, f) {
@@ -973,6 +1097,7 @@
     sub = sub || firstSub(scr);
     L.screen = ''; enter([scr, sub]);
     L.cut = L.cutCheck = L.settled = false; L.shownOnce = false; L.input = undefined;
+    L.stepsDone = S.server.settingsOpened || S.server.leftForSettings ? 2 : 0;   // as observe() would latch it
     if (scr === 'ready') {
       if (sub === 'cut' || sub === 'showing') { L.cut = true; L.shownOnce = true; }
       if (sub === 'cut') L.cutCheck = P('check') === '1';
@@ -1020,7 +1145,7 @@
     const pt = (px) => Math.round((px / mpt) * 10) / 10;
     const lines = (el, lh) => (el && el.textContent.trim() ? Math.round(el.getBoundingClientRect().height / (lh * mpt)) : 0);
     let widest = 0;
-    scrEl.querySelectorAll('.title, .body p, .caption, .address, .obk-tx b, .obk-tx span').forEach((el) => {
+    scrEl.querySelectorAll('.title, .body p, .caption, .address, .obk-tx b, .obk-tx span, .step-tx').forEach((el) => {
       if (el.closest('.ghost')) return;
       const r = document.createRange();
       r.selectNodeContents(el);

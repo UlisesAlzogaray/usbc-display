@@ -19,6 +19,7 @@
     'common.returnToWindows': 'Return to Windows',
     'common.showMacDesktop': 'Show Mac Desktop',
     'common.learnMore': 'Learn More…',
+    'common.help': 'Help',
     'common.close': 'Close',
     'common.minimize': 'Minimize',
     'common.edge.right': 'right',
@@ -119,16 +120,18 @@
 
     // ---------- open-app ----------
     'open-app.title': 'Open USB-C Display on Your Mac',
-    'open-app.downloads.body': 'In Safari, click the Downloads button at the top right, then double-click <b>USB-C Display</b>.',
-    'open-app.downloads.caption': 'When your Mac says it can’t verify the app, click <b>Done</b>, not Move to Trash.',
+    // Un-notarized: one screen from the download to the Mac app's answer. Under the story picture
+    // ('gk-story'), three numbered rows whose wording never changes, one sentence each; the row the
+    // picture is showing is current, a row this PC knows is done shows a check. In the 17 pt lead
+    // style the rows end at y 519.5, so there is no caption: the help button (?) in the tray opens
+    // the one sheet for this screen ('gatekeeper').
+    'open-app.steps.1': 'Double-click <b>USB-C-Display.zip</b> in Safari’s Downloads, then double-click <b>USB-C Display</b>.',
+    'open-app.steps.2': 'Click <b>Done</b>, then in Safari, click <b>Open Privacy &amp; Security</b>, then <b>Allow</b>.',
+    'open-app.steps.3': 'Click <b>Open Anyway</b>, then <b>Open Anyway</b> again, then use Touch ID or enter your password.',
+    // Notarized: Downloads, then macOS's confirmation. The picture ('safari-open') is the story's
+    // first chapter on its own (the zip, then the app Finder shows), so the words are row 1's.
+    'open-app.downloads.body': 'Double-click <b>USB-C-Display.zip</b> in Safari’s Downloads, then double-click <b>USB-C Display</b>.',
     'open-app.confirm.body': 'When your Mac asks if you’re sure, click <b>Open</b>.',
-    'open-app.not-opened.body': 'Click <b>Done</b>, then click <b>Open Privacy &amp; Security</b> on the USB-C Display page in Safari.',
-    'open-app.not-opened.caption': 'Your Mac shows this for apps that Apple hasn’t verified. USB-C Display came from this PC through the cable.',
-    'open-app.page-button.body': 'In Safari, click <b>Open Privacy &amp; Security</b> on the USB-C Display page.',
-    'open-app.page-button.caption': 'If you clicked Move to Trash, click Download Again on the page instead.',
-    'open-app.safari-allow.body': 'When Safari asks to open System Settings, click <b>Allow</b>.',
-    'open-app.open-anyway.body': 'Click <b>Open Anyway</b>. When your Mac asks again, click <b>Open Anyway</b> and use Touch ID or enter your password.',
-    'open-app.open-anyway.caption': 'Then USB-C Display sets itself up. If your Mac shows “Login Item Added,” there’s nothing to click.',
     'open-app.setting-up.body': 'USB-C Display is setting itself up on your Mac.',
     'open-app.setting-up.caption': 'If your Mac shows “Login Item Added,” there’s nothing to click.',
     'open-app.setting-up-late.body': 'On your Mac, open USB-C Display from the Applications folder.',
@@ -215,14 +218,9 @@
     'sheet.safari.p3': 'On your Mac, quit any VPN apps for now, and make sure the cable is still connected.',
 
     'sheet.gatekeeper.title': 'About Opening USB-C Display',
-    'sheet.gatekeeper.p1': 'Your Mac checks every app before it opens it. USB-C Display isn’t verified by Apple yet, so your Mac asks you to allow it in Privacy &amp; Security.',
-    'sheet.gatekeeper.p2': 'USB-C Display came from this PC through the cable, not from the internet.',
-    'sheet.gatekeeper.p3': 'If you clicked Move to Trash, click Download Again on the USB-C Display page in Safari, then open it again.',
-
-    'sheet.open-anyway.title': 'If You Don’t See Open Anyway',
-    'sheet.open-anyway.p1': 'On your Mac, open System Settings &gt; Privacy &amp; Security and scroll down to Security. Open Anyway is there for about an hour after you try to open the app.',
-    'sheet.open-anyway.p2': 'If you clicked Move to Trash, click Download Again on the USB-C Display page in Safari, then open it again.',
-    'sheet.open-anyway.p3': 'If your Mac asks for your password or about incoming network connections, enter your password or click Allow.',
+    'sheet.gatekeeper.p1': 'Your Mac asks before it opens apps that Apple hasn’t verified. USB-C Display came from this PC through the cable, not from the internet.',
+    'sheet.gatekeeper.p2': 'If you don’t see Open Anyway in Privacy &amp; Security, double-click USB-C Display in your Downloads folder again. Open Anyway appears for about an hour after you try to open the app.',
+    'sheet.gatekeeper.p3': 'If you clicked Move to Trash, click Download Again on the USB-C Display page in Safari, then start again at step 1.',
 
     'sheet.screen.title': 'About Screen Recording',
     'sheet.screen.p1': 'USB-C Display records only the display it adds for this PC and sends it directly through the cable. Nothing is saved, and no audio is sent.',

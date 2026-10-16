@@ -10,9 +10,13 @@
 //   ?theme=light|dark ?accent= the Mac's appearance and accent, once the Mac is known (dark, purple)
 //   flags (stills and the scenarios' first state):
 //     ?acct=standard ?signed=1 ?notarized=1 ?update=1 ?input=1 ?edge=left|right|top|bottom|unknown ?pointer=1
+//     ?settings=1                open-app: the page has reported Open Privacy & Security (rows 1-2 done)
+//                                and System Settings is in front
 //   ?active=0                  this window is not the active one (the host's {type:'active', on:false})
 //   ?log=1                     keeps the scenario's log in <pre id="mock-log"> (JSON, for shoot.sh)
-//   ?list=subs                 writes every [screen, sub] (D.SUBS) into <pre id="mock-subs"> (for shoot.sh)
+//   ?list=subs                 writes every [screen, sub] (D.SUBS) into <pre id="mock-subs">, the sheet ids
+//                              into <pre id="mock-sheets"> and the un-notarized open-app sub into
+//                              <pre id="mock-story"> (for shoot.sh)
 //
 // What it needs from app.js: D.receive(msg) takes every host message ({type:'state'|'active'|
 // 'remoteAct'|'mirror'}); every command goes to D.mock.receive(cmd); the local place is readable
@@ -46,7 +50,9 @@
     connect: ['cable', 'cable-hint', 'no-cable', 'reconnect', 'finding', 'no-mac', 'no-server', 'port-busy'],
     unreachable: ['waiting', 'help'],
     'get-app': ['address', 'address-hint', 'address-ip', 'download', 'download-hint', 'allow-downloads', 'downloading'],
-    'open-app': ['downloads', 'confirm', 'not-opened', 'page-button', 'safari-allow', 'open-anyway', 'setting-up', 'setting-up-late'],
+    // Un-notarized: one screen from the download to the Mac app's answer (its sub comes from
+    // steps.js's D.SUBS, see storySub); notarized: downloads, then confirm.
+    'open-app': ['downloads', 'confirm', 'setting-up', 'setting-up-late'],
     move: ['idle', 'moving', 'failed'],
     login: ['settings', 'asking'],
     'allow-screen': ['prompt', 'settings', 'reopen', 'reopen-late', 'off'],
@@ -79,6 +85,11 @@
   const specSubs = () => { const out = []; Object.keys(SUBS_SPEC).forEach((k) => SUBS_SPEC[k].forEach((s) => out.push([k, s]))); return out; };
   const subsList = () => { const n = normSubs(D.SUBS); return n && n.length ? n : specSubs(); };
   const firstSub = (screen) => { const e = subsList().find((x) => x[0] === screen); return e ? e[1] : (SUBS_SPEC[screen] || [''])[0]; };
+  // The un-notarized open-app screen: one sub from "download finished" until the Mac app answers.
+  // Whatever steps.js calls it ('steps'): the open-app sub that is neither the notarized pair nor
+  // the Mac ping's setting-up pair; 'downloads' when there is none.
+  const OPEN_OTHER = ['downloads', 'confirm', 'setting-up', 'setting-up-late'];
+  const storySub = () => { const e = subsList().find((x) => x[0] === 'open-app' && OPEN_OTHER.indexOf(x[1]) < 0); return e ? e[1] : 'downloads'; };
 
   // ---------- Snapshots ----------
   const ACCENTS = ['blue', 'purple', 'pink', 'red', 'orange', 'yellow', 'green', 'graphite'];
@@ -176,6 +187,7 @@
     f.update = on('update');
     f.input = on('input');
     f.pointer = on('pointer');
+    f.settings = on('settings');
     const e = pick('edge');
     f.edge = e == null || e === true || e === '' ? 'right' : String(e);
     f.theme = pick('theme') || '';
@@ -247,15 +259,14 @@
     if (screen === 'open-app') {
       if (f.update) W.appUp(s, look, '3');
       switch (sub) {
+        // Notarized (and the un-notarized screen, whatever its sub): just downloaded, Safari in front.
         case 'downloads': sv.pageFocused = true; break;
         case 'confirm': sv.appNotarized = true; sv.pageBlurs = 1; sv.pageFocused = false; break;
-        case 'not-opened': sv.pageBlurs = 1; sv.pageFocused = false; break;
-        case 'page-button': sv.pageBlurs = 1; sv.pageFocused = true; break;
-        case 'safari-allow': sv.pageBlurs = 1; sv.pageFocused = true; sv.settingsOpened = true; break;
-        case 'open-anyway': sv.pageBlurs = 2; sv.pageFocused = false; sv.settingsOpened = true; sv.leftForSettings = true; break;
         case 'setting-up': case 'setting-up-late': sv.pageBlurs = 2; sv.pageFocused = false; sv.appOpened = true; break;
-        default: break;
+        default: sv.pageFocused = true; break;
       }
+      // ?settings=1: the page reported Open Privacy & Security, Allow put System Settings in front.
+      if (f.settings) { sv.pageBlurs = Math.max(2, sv.pageBlurs); sv.pageFocused = false; sv.settingsOpened = true; sv.leftForSettings = true; }
       return fin();
     }
     sv.pageBlurs = 2; sv.pageFocused = false;
@@ -382,6 +393,115 @@
       if (p.split('/')[0] === 'welcome' && cmds.some((c) => c.cmd === 'setUp')) report.welcomeAfterStart = true;
     }
     watchStatus();
+    watchOpen(p);
+  }
+
+  // ---------- The un-notarized open-app screen (the owner's run, 16 Oct) ----------
+  // One screen from "download finished" until the Mac app answers: one sub, one story animation
+  // ('gk-story'), and a fixed list of three numbered rows whose wording never changes. A row the
+  // PC knows is done shows a check (rows 1-2 once the page has reported 'settings') and never
+  // goes back, whatever Safari's focus and blur say; only a new download may start the list over.
+  // Read from the screen on show (app.js's 'steps' content): ol.steps > li[data-row], a done row
+  // with .done (its check in .step-mark), the current one with .current / aria-current.
+  const openLog = { story: '', subs: [], rows: [], scenes: [], settings: [], restarts: [], found: false };
+  report.open = openLog;
+  function rowsNow() {
+    const scr = document.querySelector('#page > .scr:not(.leaving)');
+    const rows = scr ? Array.from(scr.querySelectorAll('.content li[data-row]')).filter((el) => !el.closest('.ghost')) : [];
+    if (!rows.length) return null;
+    const words = (el) => {
+      const c = el.cloneNode(true);
+      c.querySelectorAll('[aria-hidden="true"], .step-mark').forEach((x) => x.remove());
+      return (c.textContent || '').replace(/\s+/g, ' ').trim();
+    };
+    let done = 0, current = 0;
+    rows.forEach((el, i) => {
+      if (el.matches('.done, [data-done="1"]')) done = Math.max(done, i + 1);   // the last checked row
+      if (el.matches('.current, [aria-current]:not([aria-current="false"])')) current = i + 1;
+    });
+    return { n: rows.length, done, current, text: rows.map(words).join(' | ') };
+  }
+  function viewScene() {
+    const v = D.debug && D.debug.view ? D.debug.view() : null;
+    const sc = v && v.scene;
+    if (!sc) return null;
+    const o = sc.opts || {};
+    const from = o.fromChapter != null ? o.fromChapter : o.from != null ? o.from : null;
+    return { key: (sc.name || '?') + (from != null ? '@' + from : ''), name: sc.name, opts: o };
+  }
+  // The loop's length and chapters (tl.chapters) of a scene, as macos.js draws it (it plays on the
+  // wall clock, whatever ?speed= says).
+  function storyTl(sc) {
+    let tl = null;
+    try { const m = D.scenes && D.scenes.mac && D.scenes.mac(sc.name, sc.opts); tl = m && m.tl; } catch (e) { tl = null; }
+    if (!tl) return {};
+    return { dur: tl.dur || 0, chapters: Array.isArray(tl.chapters) ? tl.chapters.map((c) => [+c.row, +c.start, +c.end]) : [] };
+  }
+  let lastRows = null, lastScene = '';
+  function watchOpen(p) {
+    if (!S) return;
+    const [scr, sub] = (p || '').split('/');
+    if (scr !== 'open-app') { lastRows = null; lastScene = ''; return; }
+    if (openLog.subs.indexOf(sub) < 0) openLog.subs.push(sub);
+    if (S.server.appNotarized || /^setting-up/.test(sub)) return;
+    const vs = viewScene();
+    const sc = vs ? vs.key : '';
+    if (sc !== lastScene) { lastScene = sc; openLog.scenes.push(Object.assign({ t: clock(), scene: sc }, vs ? storyTl(vs) : {})); }
+    const r = rowsNow();
+    if (!r) return;
+    openLog.found = true;
+    if (!lastRows || r.done !== lastRows.done || r.current !== lastRows.current || r.text !== lastRows.text || r.n !== lastRows.n) {
+      openLog.rows.push(Object.assign({ t: clock(), sub }, r, lastRows && r.text === lastRows.text ? { text: '=' } : {}));
+      lastRows = r;
+    }
+  }
+  // After the scenario: the open-app checks (problems, as the other checks of the mock).
+  function analyseOpen(out) {
+    const subs = openLog.subs.filter((s) => !/^setting-up/.test(s));
+    const unnotarized = subs.some((s) => s !== 'confirm') && !(S && S.server.appNotarized);
+    if (!unnotarized) return;
+    if (subs.length > 1) out.push('open-app changed its sub-state (' + subs.join(' > ') + '), not one screen');
+    // The Mac ping's setting-up comes after it, never before.
+    const ping = transitions.find((x) => /^open-app\/setting-up/.test(x.place));
+    const after = ping && transitions.find((x) => x.t > ping.t && x.place.indexOf('open-app/') === 0 && !/^open-app\/setting-up/.test(x.place));
+    if (after) out.push('open-app went back from ' + ping.place + ' to ' + after.place + ' at ' + after.t + 's');
+    if (!openLog.found) { out.push('open-app: no numbered list of rows found under the picture'); return; }
+    let text = '', prev = null;
+    const rows = openLog.rows;
+    rows.forEach((r) => {
+      if (r.n !== 3) out.push('open-app: ' + r.n + ' rows at ' + r.t + 's (want 3)');
+      if (r.text !== '=') { if (text && r.text !== text) out.push('open-app: the rows’ wording changed at ' + r.t + 's'); text = r.text; }
+      // A row unchecked: only after a new download (Download Again).
+      if (prev && r.done < prev.done && !openLog.restarts.some((t) => t > prev.t - 0.05 && t <= r.t + 0.05)) {
+        out.push('open-app went back: ' + prev.done + ' rows done, then ' + r.done + ' at ' + r.t + 's');
+      }
+      // Checked with nothing to know it by: the rows are done once the page reported 'settings'.
+      const known = openLog.settings.filter((t) => t <= r.t + 0.05);
+      const sinceRestart = openLog.restarts.filter((t) => t <= r.t + 0.05).pop();
+      const reported = known.length && (sinceRestart == null || known[known.length - 1] >= sinceRestart);
+      if (r.done > 0 && !reported) out.push('open-app: ' + r.done + ' row(s) checked at ' + r.t + 's before the page reported Open Privacy & Security');
+      if (r.done >= 2 && r.current && r.current < 3) out.push('open-app: row ' + r.current + ' is current at ' + r.t + 's with rows 1-2 done');
+      prev = r;
+    });
+    // Each 'settings' report: rows 1-2 checked within 1.5 s (of the report, or of the screen
+    // coming up after it), while the screen is still up. On a faster clock (?speed=), at least
+    // the 0.3 s of real time a render and this watcher take.
+    const entered = (transitions.find((x) => x.place.indexOf('open-app/') === 0) || {}).t;
+    const grace = Math.max(1.5, 0.3 * speed);
+    openLog.settings.forEach((ts) => {
+      const from = entered != null && entered > ts ? entered : ts;
+      const left = transitions.find((x) => x.t > from && x.place.indexOf('open-app/') !== 0);
+      const by = from + grace;
+      if (left && left.t < by) return;
+      const at = rows.filter((r) => r.t <= by).pop();
+      if (!at || at.done < 2) out.push('open-app: rows 1-2 not checked ' + grace + ' s after the page reported Open Privacy & Security (' + ts + 's)');
+    });
+    // The animation plays only what is left once rows 1-2 are done.
+    const first = rows.find((r) => r.done >= 2);
+    if (first) {
+      const sc = openLog.scenes.filter((x) => x.t <= first.t + 1.5).pop();
+      if (sc && sc.scene.indexOf('@') < 0) out.push('open-app: the story still plays from the start with rows 1-2 done (' + sc.scene + ')');
+    }
   }
   // The status line's check (a done text with its tick) only when that work has really completed:
   // a busy status replaced by something else (the "Installing…" override, an error) just goes
@@ -485,6 +605,7 @@
     // Settings": it opened on settings because System Settings was in front from the step
     // before, and the prompt came after (engineering-1).
     report.problems = found.slice();
+    analyseOpen(report.problems);
     for (let i = 1; i < transitions.length; i++) {
       const a = transitions[i - 1].place.split('/'), b = transitions[i].place.split('/');
       if (a[0] === b[0] && (a[0] === 'allow-screen' || a[0] === 'allow-control') && a[1] === 'settings' && b[1] === 'prompt') {
@@ -707,6 +828,36 @@
       s.mac.status.sessionActive = false; s.mac.status.displaySide = '';
     }, note || 'host: receiver stopped');
   }
+  // The page in Safari reports focus, blur, settings (Open Privacy & Security), download and the
+  // Mac app's optional 'opened'; the host takes them as Wizard.OnPageEvent does, on this clock.
+  let settingsAt = 0;
+  function page(e, note) {
+    if (note) log(note);
+    set((s) => {
+      const sv = s.server;
+      switch (e) {
+        case 'blur':
+          // A blur after a focus is a new one; the first blur after the download counts even with
+          // no focus reported before it (the Mac's alert taking the focus).
+          if (sv.pageFocused || (sv.download.done && sv.pageBlurs === 0)) sv.pageBlurs++;
+          sv.pageFocused = false;
+          // Safari lost the focus a moment after Open Privacy & Security: System Settings is in front.
+          if (sv.settingsOpened && now() - settingsAt >= 800) sv.leftForSettings = true;
+          break;
+        case 'focus':
+          sv.pageFocused = true;
+          if (sv.leftForSettings) { sv.settingsOpened = false; sv.leftForSettings = false; }
+          break;
+        case 'settings':
+          sv.settingsOpened = true; sv.leftForSettings = false; settingsAt = now();
+          openLog.settings.push(clock());
+          break;
+        case 'download': sv.downloadClicked = true; break;
+        case 'opened': sv.appOpened = true; break;
+        default: break;
+      }
+    }, 'page: ' + e);
+  }
   async function relaunch() {
     if (busy.relaunch) return;
     busy.relaunch = true;
@@ -811,29 +962,42 @@
     rule('type', () => S.link.macFound && sv().urlReady && !sv().pageVisited && needApp(), () => o.typeAt, () => set((s) => W.visited(s, look), 'person: types the address; the page opens'));
     rule('download', () => sv().pageVisited && !sv().download.done && !sv().downloadClicked && sv().download.sent === 0 && needApp() && !busy.download,
       () => o.downloadAt, () => download());
-    rule('open', () => sv().download.done && needApp() && sv().pageBlurs === 0 && sv().pageFocused && !sv().settingsOpened && !busy.download,
-      () => o.openAt, () => set((s) => { s.server.pageFocused = false; s.server.pageBlurs = 1; }, sv().appNotarized ? 'person: opens the app; macOS asks to confirm' : 'person: opens the app; macOS says “Not Opened”'));
-    rule('confirm', () => sv().appNotarized && sv().pageBlurs > 0 && !sv().pageFocused && needApp(), () => o.confirmAt,
-      () => { log('person: Open'); later(1.5, () => set((s) => W.appUp(s, look, '5'), 'mac: the app answers (moved, login agent on)')); });
+    // Opening the app. What the person has done is theirs (world.*); the host only hears the page's
+    // focus, blur and settings, which a real Safari reports late, twice or not at all.
+    // Double-click in Safari's Downloads: the zip opens into USB-C Display, which opens; macOS's
+    // alert (Not Opened, or the notarized confirmation) takes the focus from Safari.
+    rule('open', () => sv().download.done && needApp() && !world.opened && sv().pageFocused && !busy.download,
+      () => o.openAt, () => {
+        world.opened = true;
+        page('blur', sv().appNotarized ? 'person: opens USB-C Display from Safari’s Downloads; macOS asks to confirm'
+          : 'person: opens USB-C-Display.zip from Safari’s Downloads, then USB-C Display; macOS says “Not Opened”');
+      });
+    rule('confirm', () => sv().appNotarized && world.opened && !world.confirmed && needApp(), () => o.confirmAt,
+      () => { world.confirmed = true; log('person: Open'); later(1.5, () => set((s) => W.appUp(s, look, '5'), 'mac: the app answers (moved, login agent on)')); });
     // Done in the Not Opened alert. On a real Mac, Safari often doesn't get the focus back (or the
     // app was opened from Finder): the page then sends nothing, and the person goes on to the
     // page's Open Privacy & Security button, which the page already shows.
-    rule('gk-done', () => !sv().appNotarized && sv().download.done && sv().pageBlurs > 0 && !sv().pageFocused && !sv().settingsOpened && needApp(),
+    rule('gk-done', () => !sv().appNotarized && world.opened && !world.gkDone && !world.trash && needApp(),
       () => o.doneAt, () => {
-        if (o.focusAfterDone) set((s) => { s.server.pageFocused = true; }, 'person: Done (Safari comes back)');
-        else { world.gkDone = true; log('person: Done (Safari stays in the background; the page sends nothing)'); }
+        world.gkDone = true;
+        if (o.focusAfterDone) page('focus', 'person: Done (Safari comes back)');
+        else log('person: Done (Safari stays in the background; the page sends nothing)');
       });
-    // Clicking the page's button brings Safari forward (focus), then the click (settings).
-    rule('page-button', () => !sv().appNotarized && sv().download.done && sv().pageBlurs > 0 && (sv().pageFocused || world.gkDone) && !sv().settingsOpened && needApp(),
-      () => o.pageButtonAt, () => set((s) => { s.server.pageFocused = true; s.server.settingsOpened = true; }, 'person: Open Privacy & Security on the page (Safari comes forward and asks)'));
-    rule('safari-allow', () => sv().settingsOpened && !sv().leftForSettings && sv().pageFocused && needApp(), () => o.allowAt,
-      () => set((s) => { s.server.pageFocused = false; s.server.pageBlurs++; s.server.leftForSettings = true; }, 'person: Allow (System Settings in front)'));
+    // Clicking the page's button brings Safari forward (focus), then the click (settings), and
+    // Safari asks whether the page may open System Settings.
+    rule('page-button', () => !sv().appNotarized && world.gkDone && !world.settingsClicked && needApp(),
+      () => o.pageButtonAt, () => {
+        world.settingsClicked = true;
+        if (!sv().pageFocused) page('focus', 'person: clicks the page (Safari comes forward)');
+        page('settings', 'person: Open Privacy & Security on the page; Safari asks');
+      });
+    rule('safari-allow', () => world.settingsClicked && !world.inSettings && needApp(), () => o.allowAt,
+      () => { world.inSettings = true; page('blur', 'person: Allow (System Settings in front)'); });
     // Privacy & Security stays in front: the app moves itself and its agent starts from launchd,
     // so nothing takes the foreground from System Settings (engineering-1). Not in W.appUp: the
     // notarized Open never involves System Settings.
-    rule('open-anyway', () => sv().leftForSettings && needApp(), () => o.anywayAt,
-      () => set((s) => { W.appUp(s, look, '5'); s.mac.status.settingsFront = true; world.pane = 'security'; },
-        'person: Open Anyway ×2, Touch ID; the app answers (Privacy & Security still in front)'));
+    rule('open-anyway', () => world.inSettings && !world.anyway && needApp(), () => o.anywayAt,
+      () => { world.anyway = true; macAnswers('person: Open Anyway ×2, Touch ID; the app answers (Privacy & Security still in front)'); });
     // Prompts and System Settings on the Mac
     rule('prompt', () => st().promptUp, () => o.promptClickAt, () => {
       if (o.closePrompt > 0) { o.closePrompt--; set((s) => { s.mac.status.promptUp = false; world.prompt = ''; }, 'person: closes the prompt'); return; }
@@ -846,25 +1010,37 @@
     // The display
     rule('pointer', () => S.screen.showing && !S.screen.pointerOnLaptop, () => o.pointerAt, () => set((s) => { s.screen.pointerOnLaptop = true; }, 'person: the pointer is on this display'));
   }
+  // The page's Download (or Download Again, after Move to Trash): the opening starts over. As the
+  // host (Wizard.OnDownload), download.done stays true through a new download once it was true,
+  // and the end of a download clears pageBlurs, settingsOpened and leftForSettings.
   async function download() {
     busy.download = true;
-    set((s) => { s.server.downloadClicked = true; }, 'person: Download');
+    const again = S.server.download.done;
+    Object.assign(world, { opened: false, confirmed: false, gkDone: false, trash: false, settingsClicked: false, inSettings: false, anyway: false });
+    if (!S.server.pageFocused) page('focus');
+    page('download', again ? 'person: Download Again' : 'person: Download');
+    if (again) openLog.restarts.push(clock());
     if (o.allowDownloadsAt != null) {
       await sleep(o.allowDownloadsAt);
       log('person: Allow (downloads)');
     } else await sleep(0.3);
     const steps = Math.max(1, Math.round(o.bytesSecs / 0.2));
-    set((s) => { s.server.download = { sent: 0, size: APP_SIZE, done: false }; });
+    set((s) => { s.server.download = { sent: 0, size: APP_SIZE, done: again }; });
     for (let i = 1; i <= steps && !stopped; i++) {
       await sleep(o.bytesSecs / steps);
       const sent = Math.round((APP_SIZE * i) / steps);
       set((s) => {
-        s.server.download = { sent, size: APP_SIZE, done: sent >= APP_SIZE };
-        if (sent >= APP_SIZE) { s.server.downloadClicked = false; s.server.pageBlurs = 0; s.server.pageFocused = true; world.gkDone = false; }
+        s.server.download = { sent, size: APP_SIZE, done: again || sent >= APP_SIZE };
+        if (sent >= APP_SIZE) Object.assign(s.server, { downloadClicked: false, pageBlurs: 0, settingsOpened: false, leftForSettings: false });
       });
     }
     log('host: download done');
     busy.download = false;
+  }
+  // The Mac app answers the probe after Open Anyway: it has moved itself to Applications and its
+  // login agent is on. Privacy & Security stays in front (engineering-1).
+  function macAnswers(note) {
+    set((s) => { W.appUp(s, look, '5'); s.mac.status.settingsFront = true; world.pane = 'security'; }, note);
   }
   async function grant() {
     busy.grant = true;
@@ -920,6 +1096,8 @@
   // timing; script: what else happens; end: where it must end ('finish' = Done was clicked).
   const stage = (screen, sub, flags) => () => stateFor(screen, sub, Object.assign({ theme: look.theme }, flags || {}));
   const atConnect = (s) => { W.started(s); W.elevated(s); W.installedCopy(s); return s; };
+  // The owner's run: the download by itself, then only the scripted events (no person's rules).
+  const OWNER_O = { downloadAt: 2, openAt: null, doneAt: null, pageButtonAt: null, allowAt: null, anywayAt: null };
   const SC = {
     default: { init: () => base(), o: { yesAfter: 6.5 } },
     'first-run': { init: () => base(), o: { yesAfter: 6.5 }, end: 'finish' },
@@ -952,22 +1130,58 @@
         await sleep(2); o.typeAt = 4;
       }, end: 'get-app/download', allowBack: ['connect/reconnect'] },
     'search-page': { init: stage('get-app', 'address'), o: { typeAt: 50 }, end: 'get-app/download' },
-    'allow-downloads': { init: stage('get-app', 'download'), o: { allowDownloadsAt: 3, bytesSecs: 4, openAt: null }, end: 'open-app/downloads' },
-    'move-to-trash': { init: stage('open-app', 'downloads'), o: { pageButtonAt: null, doneAt: 3 },
+    'allow-downloads': { init: stage('get-app', 'download'), o: { allowDownloadsAt: 3, bytesSecs: 4, openAt: null }, end: () => 'open-app/' + storySub() },
+    // Opening the un-notarized app: one screen, whatever the person and Safari do, until the Mac
+    // app answers (the open-app checks of analyseOpen: one sub, three rows, no row unchecked).
+    // Move to Trash instead of Done, back to Safari, Download Again: the opening starts over (the
+    // list may start over too), and this time Done.
+    'move-to-trash': { init: () => stage('open-app', storySub())(), o: { doneAt: null },
       script: async () => {
-        await until((s) => s.server.pageBlurs > 0 && (s.server.pageFocused || world.gkDone));
-        log('person: clicked Move to Trash, not Done'); o.openAt = null;
-        await sleep(2);
-        set((s) => { s.server.pageFocused = true; }, 'person: back in Safari');
+        await until(() => world.opened);
+        await sleep(3); world.trash = true; log('person: Move to Trash, not Done');
+        await sleep(2); page('focus', 'person: back in Safari');
         await sleep(4); await download();
-      }, end: 'open-app/downloads' },
-    'done-focus': { init: stage('open-app', 'downloads'), o: { focusAfterDone: true, pageButtonAt: 5 }, end: 'allow-screen' },
-    'back-to-safari': { init: stage('open-app', 'open-anyway'), o: { anywayAt: null, pageButtonAt: null },
+        o.doneAt = 4;
+      }, end: 'allow-screen' },
+    // Done gives Safari the focus back (it often doesn't).
+    'done-focus': { init: () => stage('open-app', storySub())(), o: { focusAfterDone: true, pageButtonAt: 5 }, end: 'allow-screen' },
+    // In Privacy & Security (rows 1-2 done), back to Safari for a while: the host clears
+    // settingsOpened and leftForSettings, the rows stay checked. Then the page's button again,
+    // Allow, Open Anyway.
+    'back-to-safari': { init: () => stage('open-app', storySub(), { settings: true })(), o: { anywayAt: null },
       script: async () => {
         await sleep(4);
-        set((s) => { s.server.pageFocused = true; s.server.settingsOpened = false; s.server.leftForSettings = false; }, 'person: back to Safari (the host clears settingsOpened and leftForSettings)');
+        page('focus', 'person: back to Safari (the host clears settingsOpened and leftForSettings)');
         await sleep(6);
-      }, end: 'open-app/page-button' },
+        Object.assign(world, { settingsClicked: false, inSettings: false });
+        o.anywayAt = 8;
+      }, end: 'allow-screen' },
+    // The owner's run on 16 Oct (PC log, the page's events), replayed from the download:
+    // blur 7 s later (opening it), focus 45 s, settings 54.5 s, blur 0.76 s later (under the
+    // 0.8 s leftForSettings threshold, so it doesn't count), focus 2.6 s later, and the Mac app
+    // answers at 150 s. No backward movement; rows 1-2 checked from 'settings' on.
+    'focus-noise': { init: stage('get-app', 'download'), o: OWNER_O, script: () => ownerRun(0.76), end: 'allow-screen' },
+    // The same run with that blur 0.9 s after the click: the host takes it as System Settings in
+    // front (leftForSettings), so the focus 2.6 s later clears settingsOpened and leftForSettings
+    // while the person is still in System Settings. The rows must not care either way.
+    'focus-noise-cleared': { init: stage('get-app', 'download'), o: OWNER_O, script: () => ownerRun(0.9), end: 'allow-screen' },
+    // In Privacy & Security (rows 1-2 done) with no Open Anyway to click (the app went to the Bin):
+    // back to Safari, Download Again. The one path that may start the rows over; then the whole
+    // opening again.
+    'download-again': { init: () => stage('open-app', storySub(), { settings: true })(), o: { anywayAt: null },
+      script: async () => {
+        await sleep(4); page('focus', 'person: back to Safari');
+        await sleep(3); await download();
+        o.anywayAt = 8;
+      }, end: 'allow-screen' },
+    // The Mac app's own "opened" (the Mac ping) before it answers the probe: steps, then
+    // setting-up, never back to steps.
+    'mac-ping': { init: () => stage('open-app', storySub())(), o: { anywayAt: null },
+      script: async () => {
+        await until(() => world.inSettings);
+        await sleep(6); world.anyway = true; page('opened', 'person: Open Anyway ×2, Touch ID; the app says it was opened');
+        await sleep(5); macAnswers('mac: the app answers');
+      }, end: 'allow-screen' },
     notarized: { init: stage('open-app', 'downloads', { notarized: true }), end: 'allow-screen' },
     relaunch: { init: stage('allow-screen', 'prompt'), o: { relaunchSecs: 15 }, end: 'keyboard/offer',
       prep: (s) => { s.mac.status.promptUp = false; s.mac.status.screenPrompted = false; } },
@@ -1035,6 +1249,19 @@
     'handoff-hold': { init: () => holdInit(true), o: { plugAt: null, inactive: true }, end: 'connect/cable', script: () => holdScript(true) },
     'handoff-hold-inactive': { init: () => holdInit(false), o: { plugAt: null }, end: 'connect/cable', script: () => holdScript(false) },
   };
+  // The owner's run (focus-noise): the page's events as the PC logged them, from the download.
+  // blurAfter: the blur after Open Privacy & Security (0.76 s in that run).
+  async function ownerRun(blurAfter) {
+    await until((s) => s.server.download.done && !busy.download);
+    const t0 = now();
+    const when = async (sec) => { const w = t0 + sec * 1000 - now(); if (w > 0) await sleep(w / 1000); };
+    await when(7); world.opened = true; page('blur', 'person: opens the download; “Not Opened” (13:09:40)');
+    await when(45); world.gkDone = true; page('focus', 'Safari: focus (13:10:18)');
+    await when(54.5); world.settingsClicked = true; page('settings', 'person: Open Privacy & Security (13:10:27.5)');
+    await when(54.5 + blurAfter); world.inSettings = true; page('blur', 'Safari: blur ' + blurAfter + ' s later (13:10:28.3)');
+    await when(54.5 + blurAfter + 2.6); page('focus', 'Safari: focus 2.6 s later (13:10:30.9); the person is in System Settings');
+    await when(150); world.anyway = true; macAnswers('person: Open Anyway ×2, Touch ID; the app answers (13:12:03)');
+  }
   function holdInit(active) {
     const s = atConnect(base());
     s.setup.hold = { screen: 'allow-pc', sub: 'done', status: 'status.pcReady', theme: look.theme, accent: 'blue', active };
@@ -1084,7 +1311,18 @@
     if (flags.notarized) S.server.appNotarized = true;
     if (S.mac.status.screenPrompted) o.prompted.screen = true;
     if (S.mac.status.axPrompted) o.prompted.ax = true;
-    report.expected = sc.end || null;
+    report.expected = (typeof sc.end === 'function' ? sc.end() : sc.end) || null;
+    // What the person has already done, as the first snapshot tells it (a scenario that starts
+    // after the download, or in Privacy & Security).
+    const sv0 = S.server;
+    if (sv0.download.done && sv0.pageBlurs > 0) world.opened = true;
+    if (sv0.settingsOpened) {
+      Object.assign(world, { opened: true, gkDone: true, settingsClicked: true });
+      settingsAt = now() - 5000;
+      openLog.settings.push(0);
+    }
+    if (sv0.leftForSettings) world.inSettings = true;
+    openLog.story = storySub();
     report.allowBack = sc.allowBack || [];
     report.never = sc.never || [];
     log((stepParam ? 'from ' + stepParam + '/' + (P.get('sub') || firstSub(stepParam)) : 'scenario ' + (SC[scName] ? scName : 'default')) +
@@ -1096,7 +1334,7 @@
       setInterval(() => { tickRules(); tickHost(); }, Math.max(20, 250 / speed));
       setInterval(watchPlace, 50);
       const done = sc.script ? sc.script().catch((e) => log('script error ' + e.message)) : Promise.resolve();
-      done.then(() => { if (sc.script) log('script done'); watchEnd(sc.end, !!sc.script); });
+      done.then(() => { if (sc.script) log('script done'); watchEnd(report.expected, !!sc.script); });
     };
     // As the host: the first snapshots come before this PC is checked (CheckLaptop takes a
     // moment), and the page must build nothing until then (HW1). The scenario starts after it.
@@ -1139,6 +1377,8 @@
     subs: subsList,
     SUBS_SPEC,
     scenarios: Object.keys(SC),
+    storySub,
+    page: (e) => { if (S) page(e, 'console: page ' + e); },
     flags: () => normFlags(),
     state: () => clone(S),
     set: (fn, note) => { if (S) set(fn, note || 'console change'); },
@@ -1168,7 +1408,8 @@
     (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(() => setTimeout(measure, 200));
   }
 
-  // ?list=subs: every [screen, sub] for shoot.sh.
+  // ?list=subs: every [screen, sub] for shoot.sh; and the Learn More… sheets (D.STR's
+  // sheet.<id>.title), and the un-notarized open-app sub.
   if (P.get('list') === 'subs') {
     const write = () => {
       const pre = document.createElement('pre');
@@ -1176,6 +1417,14 @@
       pre.dataset.source = normSubs(D.SUBS) && normSubs(D.SUBS).length ? 'D.SUBS' : 'SPEC';
       pre.textContent = subsList().map((e) => e[0] + ' ' + e[1]).join('\n');
       document.body.appendChild(pre);
+      const sh = document.createElement('pre');
+      sh.id = 'mock-sheets';
+      sh.textContent = Object.keys(D.STR || {}).map((k) => /^sheet\.([a-z0-9-]+)\.title$/.exec(k)).filter(Boolean).map((m) => m[1]).join('\n');
+      document.body.appendChild(sh);
+      const st = document.createElement('pre');
+      st.id = 'mock-story';
+      st.textContent = storySub();
+      document.body.appendChild(st);
     };
     if (document.body) setTimeout(write, 0); else document.addEventListener('DOMContentLoaded', write);
   }

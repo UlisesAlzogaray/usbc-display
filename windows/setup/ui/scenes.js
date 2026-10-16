@@ -136,10 +136,19 @@
   // as a selector resolves to the centre of that element plus (dx, dy).
   // tl.stillAt freezes the picture at that fraction (still pictures);
   // reduced motion freezes it at tl.poster.
+  // A story (tl.real) is a long loop: the engine's own transitions (a click,
+  // its ring, a highlight, a fade) keep the real length they have in a 6.5 s
+  // loop instead of growing with the loop. A picture with several screens
+  // (.mk-scr), or a camera that moves, gives tl.camAt(screenEl, t): the camera
+  // that screen rests at, at fraction t, so every target is measured where it
+  // will be when the pointer gets there. tl.chapters ({row, start, end} as
+  // fractions of the loop): the band's element gets a 'usbc-chapter' event
+  // ({detail: {index, chapter}}) each time the loop enters another chapter.
   D.playScene = function (root, tl, start) {
     const anims = [];
     if (!tl || !root || !root.animate) return anims;
     const dur = tl.dur || 6000;
+    const W = (f) => (tl.real ? (f * 6500) / dur : f);
     const wrap = root.closest('.scene-wrap') || root;
     const wr = wrap.getBoundingClientRect();
     const k = wr.width / (tl.w || 400) || 1;
@@ -150,29 +159,31 @@
     const clamp = (v) => Math.max(0, Math.min(1, v));
     // Canvas units of an element's box. With a camera (Mac pictures), the box
     // is measured on the Mac's screen and mapped through the scene's own
-    // camera, so it is right even while the band is still panning to it.
-    const scr = tl.cam ? layer.querySelector('.mk-scr') : null;
-    const canvasRect = (el) => {
+    // camera (at time t), so it is right even while the band is still panning to it.
+    const scr0 = tl.cam ? layer.querySelector('.mk-scr') : null;
+    const canvasRect = (el, t) => {
       const r = el.getBoundingClientRect();
+      const scr = scr0 ? (el.closest('.mk-scr') || scr0) : null;
       if (scr && scr.offsetWidth) {
         const sr = scr.getBoundingClientRect();
         const cs = sr.width / scr.offsetWidth;          // current scale of the screen, page px per Mac pt
-        const c = tl.cam;
+        const c = (tl.camAt && t != null && tl.camAt(scr, t)) || tl.cam;
         return { x: ((r.left - sr.left) / cs - c.x) * c.s, y: ((r.top - sr.top) / cs - c.y) * c.s, w: (r.width / cs) * c.s, h: (r.height / cs) * c.s };
       }
       return { x: (r.left - wr.left) / k, y: (r.top - wr.top) / k, w: r.width / k, h: r.height / k };
     };
-    const center = (sel, dx, dy) => {
+    const center = (sel, dx, dy, t) => {
       const el = typeof sel === 'string' ? first(sel) : sel;
       if (!el) return [(tl.w || 400) / 2, (tl.h || 250) / 2];
-      const b = canvasRect(el);
+      const b = canvasRect(el, t);
       return [b.x + b.w / 2 + (dx || 0), b.y + b.h / 2 + (dy || 0)];
     };
-    const box = (sel) => {
+    const box = (sel, t) => {
       const el = first(sel);
-      return el ? canvasRect(el) : null;
+      return el ? canvasRect(el, t) : null;
     };
-    const pt2 = (e) => (typeof e[1] === 'string' ? center(e[1], e[2], e[3]) : [e[1], e[2]]);
+    // [t, sel, dx, dy, easing, tm]: the target measured at tm (default t).
+    const pt2 = (e) => (typeof e[1] === 'string' ? center(e[1], e[2], e[3], e[5] != null ? e[5] : e[0]) : [e[1], e[2]]);
     const add = (el, kf, extra) => {
       if (!el) return;
       kf = normalize(kf);
@@ -186,7 +197,7 @@
     // something drawn without a radius (an icon) gets a capsule or a circle.
     const halos = (tl.halo || []).map((h) => {
       const el = first(h[0]);
-      const b = box(h[0]);
+      const b = box(h[0], h[1]);
       const rad = el ? parseFloat(getComputedStyle(el).borderTopLeftRadius) || 0 : 0;
       if (b && rad > 0 && el.offsetWidth) b.r = Math.min(b.h / 2, rad * b.w / el.offsetWidth);
       return [b, h[1], h[2]];
@@ -201,10 +212,10 @@
     const cu = first('.mk-cur') || first('.cur');
     if (cu && cursorPts.length) {
       add(cu, cursorPts.map((c) => ({ offset: c.t, transform: 'translate(' + (c.x - 1) + 'px,' + (c.y - 1) + 'px)', easing: c.easing || 'linear' })));
-      add(cu, visKf(tl.cursorVis || [[0, 1]], 0.015));
+      add(cu, visKf(tl.cursorVis || [[0, 1]], W(0.015)));
       if (clicks.length) {
         const pk = [{ offset: 0, transform: 'scale(1)' }];
-        clicks.forEach(([t]) => { pk.push({ offset: clamp(t - 0.005), transform: 'scale(1)' }, { offset: clamp(t), transform: 'scale(.82)' }, { offset: clamp(t + 0.012), transform: 'scale(1)' }); });
+        clicks.forEach(([t]) => { pk.push({ offset: clamp(t - W(0.005)), transform: 'scale(1)' }, { offset: clamp(t), transform: 'scale(.82)' }, { offset: clamp(t + W(0.012)), transform: 'scale(1)' }); });
         pk.push({ offset: 1, transform: 'scale(1)' });
         add(cu.querySelector('svg'), pk);
       }
@@ -215,7 +226,7 @@
       r.className = 'ring';
       r.style.left = p[0] + 'px'; r.style.top = p[1] + 'px';
       layer.appendChild(r);
-      add(r, [{ offset: 0, opacity: 0, transform: 'scale(.3)' }, { offset: clamp(t - 0.002), opacity: 0, transform: 'scale(.3)' }, { offset: clamp(t), opacity: 0.9, transform: 'scale(.5)' }, { offset: clamp(t + 0.05), opacity: 0, transform: 'scale(1.6)' }, { offset: 1, opacity: 0, transform: 'scale(1.6)' }]);
+      add(r, [{ offset: 0, opacity: 0, transform: 'scale(.3)' }, { offset: clamp(t - W(0.002)), opacity: 0, transform: 'scale(.3)' }, { offset: clamp(t), opacity: 0.9, transform: 'scale(.5)' }, { offset: clamp(t + W(0.05)), opacity: 0, transform: 'scale(1.6)' }, { offset: 1, opacity: 0, transform: 'scale(1.6)' }]);
     });
     // A calm highlight around what to click, while the pointer rests on it.
     halos.forEach(([b, a, z]) => {
@@ -225,10 +236,10 @@
       const pad = 2;
       Object.assign(h.style, { left: b.x - pad + 'px', top: b.y - pad + 'px', width: b.w + pad * 2 + 'px', height: b.h + pad * 2 + 'px', borderRadius: ((b.r != null ? b.r : b.h / 2) + pad) + 'px' });
       layer.appendChild(h);
-      add(h, [{ offset: 0, opacity: 0 }, { offset: clamp(a), opacity: 0 }, { offset: clamp(a + 0.03), opacity: 1 }, { offset: clamp(z - 0.01), opacity: 1 }, { offset: clamp(z + 0.02), opacity: 0 }, { offset: 1, opacity: 0 }]);
+      add(h, [{ offset: 0, opacity: 0 }, { offset: clamp(a), opacity: 0 }, { offset: clamp(a + W(0.03)), opacity: 1 }, { offset: clamp(z - W(0.01)), opacity: 1 }, { offset: clamp(z + W(0.02)), opacity: 0 }, { offset: 1, opacity: 0 }]);
     });
     // What is visible when.
-    (tl.vis || []).forEach(([sel, ranges, mode]) => all(sel).forEach((el) => add(el, visKf(ranges, 0.018, mode))));
+    (tl.vis || []).forEach(([sel, ranges, mode]) => all(sel).forEach((el) => add(el, visKf(ranges, W(0.018), mode, W(0.035)))));
     // Typing, one character at a time.
     (tl.type || []).forEach(([sel, text, a, z, end]) => all(sel).forEach((el) => {
       el.textContent = '';
@@ -248,19 +259,63 @@
     const hold = tl.stillAt != null ? tl.stillAt : (reduce && tl.poster != null ? tl.poster : null);
     if (hold != null) {
       anims.forEach((a) => { a.pause(); a.currentTime = ((hold * dur) + (a._shift || 0)) % dur; });
-      return anims;
+    } else {
+      const t0 = start != null ? start : document.timeline.currentTime;
+      anims.forEach((a) => { a.startTime = t0 - (a._shift || 0); });
     }
-    const t0 = start != null ? start : document.timeline.currentTime;
-    anims.forEach((a) => { a.startTime = t0 - (a._shift || 0); });
+    watchChapters(root, tl, anims);
     return anims;
   };
+
+  // ---------- Chapters (a story's parts, tl.chapters) ----------
+  // The fraction of the loop an animation of a scene is at: 0 before it starts.
+  D.scenes.loopFrac = function (anims, tl) {
+    const a = (anims || []).find((x) => !x._shift) || (anims || [])[0];
+    if (!a || !tl || a.currentTime == null) return null;
+    const dur = tl.dur || 6000;
+    const t = a.currentTime - (a._shift || 0);
+    return t <= 0 ? 0 : (t % dur) / dur;
+  };
+  // The index (in tl.chapters) of the chapter playing at fraction f; -1 past
+  // the last chapter's end (a story's short way back to its start).
+  D.scenes.chapterAt = function (tl, f) {
+    const ch = (tl && tl.chapters) || [];
+    let i = ch.length ? 0 : -1;
+    ch.forEach((c, j) => { if (c.end > c.start && c.start <= f + 1e-6) i = j; });
+    return i >= 0 && f > ch[i].end + 1e-6 ? -1 : i;
+  };
+  // Tells the band's element each time the loop enters another chapter (and
+  // once at the start, also for a held frame). Stops by itself once the
+  // picture is gone or its loop is cancelled.
+  function watchChapters(root, tl, anims) {
+    if (!tl.chapters || !tl.chapters.length || !anims.length || typeof CustomEvent !== 'function') return;
+    const a = anims.find((x) => !x._shift) || anims[0];
+    const dur = tl.dur || 6000;
+    let last = -1;
+    const tick = () => {
+      if (!root.isConnected || a.playState === 'idle') return;
+      const f = D.scenes.loopFrac([a], tl);
+      if (f == null) return;
+      const i = D.scenes.chapterAt(tl, f);
+      if (i !== last) {
+        last = i;
+        root.dispatchEvent(new CustomEvent('usbc-chapter', { detail: { index: i, chapter: tl.chapters[i] } }));
+      }
+      if (a.playState === 'paused') return;
+      // Wake just after the next chapter starts (or the loop wraps).
+      const next = tl.chapters.map((c) => c.start).filter((s) => s > f + 1e-6).sort((x, y) => x - y)[0];
+      const ms = ((next != null ? next : 1) - f) * dur;
+      setTimeout(tick, Math.max(40, Math.min(ms + 20, 1000)));
+    };
+    setTimeout(tick, 0);
+  }
 
   // Keyframes that show an element during the given ranges of the loop.
   // mode 'pop': a dialog appearing (fade and scale .97 to 1, like macOS);
   // 'slideL': a notification arriving from the right.
-  function visKf(ranges, f, mode) {
+  function visKf(ranges, f, mode, popF) {
     const hid = { pop: 'scale(.97)', slideL: 'translateX(24px)', up: 'translateY(8px)' }[mode];
-    const g = mode === 'pop' ? 0.035 : f;
+    const g = mode === 'pop' ? (popF != null ? popF : 0.035) : f;
     const on = (o) => (hid ? { offset: o, opacity: 1, transform: 'none' } : { offset: o, opacity: 1 });
     const off = (o) => (hid ? { offset: o, opacity: 0, transform: hid } : { offset: o, opacity: 0 });
     const kf = [];

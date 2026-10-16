@@ -133,12 +133,25 @@ The screens and copy to compare with are in design/SPEC.md (section 3).
 - [ ] The page sends its look (`/event?e=look&dark=…&accent=…`): the window's pictures use it.
 
 ### 7. Open USB-C Display on Your Mac
-- [ ] Each step follows Safari's focus: downloads → "Not Opened" (Done, not Move to Trash) →
-      the page's **Open Privacy & Security** → Safari's question (**Allow**) → System Settings'
-      **Open Anyway** (twice) and Touch ID. Note where the focus events really come (setup.log
-      `web: GET /event?e=…`).
-- [ ] Back in Safari after System Settings: the page's button again, never Safari's question.
-- [ ] Move to Trash, then Download Again on the page: back to the first step.
+- [ ] One screen from the end of the download until the Mac app answers: the picture plays the
+      whole opening as one calm story (Downloads → the zip → the app in Finder → "Not Opened"
+      **Done** → a click on Safari's window beside Finder → the page's **Open Privacy & Security**
+      → Safari's **Allow** → System Settings' **Open Anyway**, then **Open Anyway** again → Touch
+      ID), and the three numbered steps under it never change their words. The step the picture
+      is showing is the darker one. The **?** at the bottom right opens "About Opening USB-C
+      Display".
+- [ ] With Windows' animation effects off (Reduce Motion): the picture shows each click in turn as
+      a still, about 5 s each, dissolving from one to the next; the steps follow it.
+- [ ] The page: after Download it says to double-click `USB-C-Display.zip`, then `USB-C Display`;
+      after the Mac's "Not Opened" it says "Your Mac does this for every app that Apple hasn’t
+      verified." under its buttons.
+- [ ] Does the picture match the Mac? Safari's Downloads list shows `USB-C-Display.zip` (or the
+      app itself, with "Open safe files after downloading" on); double-clicking the zip leaves
+      `USB-C Display` in Finder's Downloads window.
+- [ ] Click **Open Privacy & Security** on the page: within a second steps 1 and 2 get a check and
+      the picture plays only the System Settings part. Going back and forth between Safari and
+      System Settings never unchecks them or changes the screen (setup.log `web: GET /event?e=…`).
+- [ ] Move to Trash, then Download Again on the page: the steps start over at step 1.
 - [ ] Notarized build (when there is one): only "Are you sure you want to open it?" with **Open**.
 - [ ] "Login Item Added" notification: when does it appear? Nothing to click.
 - [ ] The app opens with no window, moves itself to Applications, and this PC notices within a
@@ -227,7 +240,7 @@ The screens and copy to compare with are in design/SPEC.md (section 3).
 |---|---|---|
 | V1 | OBK style 3 title y with no image (expected 358) | Adjust the picture variant's title, body and content y together |
 | V2 | Safari: does `usbc.local` open without `http://`? Does it show "Not Secure"? | Show `http://usbc.local` as the address; add the footnote (SPEC §8) |
-| V3 | Safari focus: the Not Opened alert blurs the page; Safari's sheets keep focus; System Settings blurs it; the Downloads popover doesn't | Tune the 0.8 s `leftForSettings` threshold; merge `safari-allow` into `open-anyway` if unreliable |
+| V3 | Safari focus: the Not Opened alert blurs the page (the page's state C); the page's **Open Privacy & Security** click arrives as `settings` | The window no longer follows focus; only the page's state C and the steps' checks depend on these events |
 | V4 | The accessory prompt on a computer-to-computer link, and its exact text | Drop the accessory sentence from `connect`; keep sheet `cable` |
 | V5 | The borderless Mac copy's shadow vs `MacShadow` (`SHOT_SHADOW=1`, and this PC's screen before and after the cut) | Retune `MacShadow.Dark` / `Light` |
 | V6 | `performWindowDragWithEvent` from a script message | Use `movableByWindowBackground` plus a transparent drag strip in the 32 pt band |
@@ -236,7 +249,7 @@ The screens and copy to compare with are in design/SPEC.md (section 3).
 | V9 | Window owner names for the Touch ID and password dialogs | Adjust M4; the 6 s rule still prevents most flashes |
 | V10 | `AXIsProcessTrusted` turns true live in the agent; input reaches the Mac at the cut | Implement M7 |
 | V11 | Does the M6 "opened" ping trigger the Local Network prompt? | Keep it off (default) |
-| V12 | "Login Item Added" banner text and timing on 27.0.1 | Update `bg-items` and the `open-anyway` caption |
+| V12 | "Login Item Added" banner text and timing on 27.0.1 | Update `bg-items` and the `setting-up` caption |
 | V13 | Does the self-relaunch leave "Quit & Reopen" hanging, and does clicking it still work? | Raise M2's delay to 6 s |
 | V14 | Windows' prompt from the downloaded copy right after the install: it comes to the front (the prompt is owned by the setup window), also for standard accounts | Also call `AllowSetForegroundWindow` and `SetForegroundWindow(self)` before asking |
 | V15 | Where the new display is placed, and whether `displaySide` arrives before `settled` | The edge-unknown copy is already written |
@@ -244,7 +257,8 @@ The screens and copy to compare with are in design/SPEC.md (section 3).
 | V17 | Safari `AccentColor` reports the user accent | Send only `dark`; the accent comes from the Mac app at `allow-screen` |
 | V18 | `NSApp activate` makes the Mac copy key at the cut | The mirrored-active rule already hides it (and the host doesn't report "inactive" while handed over) |
 | V19 | Menu bar height on the virtual display (the 40 pt nudge) | Adjust `SetupWindow.MenuBar` (used by the window size and the handover place) |
-| V20 | Mac app firewall prompt and move-password frequency on un-notarized builds | If frequent, promote the sheet `open-anyway` tip 3 into the caption |
+| V20 | Mac app firewall prompt and move-password frequency on un-notarized builds | If frequent, say so on the `move` screen or bring back a Learn More… sheet for `open-app` |
+| V21 | Opening the zip from Safari's Downloads on 27.0.1: Archive Utility reveals `USB-C Display` in Finder's Downloads window; Finder's sidebar, toolbar and icon-view selection as `finderWin` draws them; with "Open safe files after downloading" on, Safari's list shows the app instead | Redraw `finderWin`; if Finder doesn't come forward, change the story's chapter 1 and `open-app.steps.1` / `open-app.downloads.body` together |
 
 **Already checked**
 - [x] Transparent WebView2 on a window without a redirection surface: its alpha reaches the

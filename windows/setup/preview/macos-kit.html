@@ -11,6 +11,10 @@
        ?cols=dark:purple,light:purple,dark:blue,light:blue   the looks (appearance:accent)
        ?k=0.5            the band's scale (1 = 800 x 300 CSS px)
        ?f=0.3            freeze every loop at that fraction;  ?poster=1  at each scene's poster
+       ?chapter=2&at=0.5 freeze a scene with chapters (tl.chapters, the story scenes) at that point
+                         of its 2nd chapter (1 = the first; at 0..1, default 0.5)
+       ?from=N           the scenes' opt.fromChapter (0-based in tl.chapters): play only from that
+                         chapter on, as the setup window does once the earlier rows are done
        ?still=1 ?off=1   the scenes' still and switch-off variants
        ?host= ?size= ?version= ?notarized=1   the scenes' live parameters
        ?theme=light|dark this page's own background -->
@@ -31,7 +35,7 @@
   .kit-band .band-canvas { position: absolute; left: 0; top: 0; width: 800px; height: 300px; transform-origin: 0 0; transform: scale(var(--k)); overflow: hidden; }
   .kit-cap { color: var(--kmuted); font-size: 11px; line-height: 14px; margin-top: 4px; }
   #err { white-space: pre-wrap; color: #ff453a; font: 12px/16px ui-monospace, Consolas, monospace; }
-  #kit-names { display: none; }
+  #kit-names, #kit-chapters { display: none; }
 </style>
 </head>
 <body>
@@ -40,6 +44,7 @@
 <div id="err"></div>
 <div class="kit-grid" id="grid"></div>
 <pre id="kit-names"></pre>
+<pre id="kit-chapters"></pre>
 <script>
   // Errors from the scripts below show on the page, so a headless render shows them too.
   window.addEventListener('error', function (e) { document.getElementById('err').textContent += (e.message || e) + ' @ ' + (e.filename || '') + ':' + (e.lineno || '') + '\n'; });
@@ -56,13 +61,16 @@
 
   // SPEC §6.3, for when macos.js doesn't list its scenes.
   var SPEC_NAMES = ['safari-type', 'safari-download', 'safari-allow-dl', 'safari-open', 'safari-settings', 'safari-allow',
-    'gk-notopened', 'gk-open', 'gk-anyway', 'screen-prompt', 'ax-prompt', 'screen-list', 'ax-list', 'login-list', 'screen-reopen', 'bg-items'];
+    'gk-notopened', 'gk-open', 'gk-anyway', 'gk-story', 'screen-prompt', 'ax-prompt', 'screen-list', 'ax-list', 'login-list', 'screen-reopen', 'bg-items'];
   var NOTES = {
     'safari-type': 'get-app address: type the address', 'safari-download': 'get-app download: click Download',
-    'safari-allow-dl': 'get-app allow-downloads: click Allow', 'safari-open': 'open-app downloads: double-click the download',
-    'safari-settings': 'open-app page-button: click Open Privacy & Security', 'safari-allow': 'open-app safari-allow: click Allow',
-    'gk-notopened': 'open-app not-opened: click Done, not Move to Trash', 'gk-open': 'open-app confirm (notarized): click Open',
-    'gk-anyway': 'open-app open-anyway: Open Anyway, Open Anyway, Touch ID', 'screen-prompt': 'allow-screen prompt: Open System Settings',
+    'safari-allow-dl': 'get-app allow-downloads: click Allow', 'safari-open': 'open-app downloads (notarized): gk-story chapter 1 on its own: the zip, then the app',
+    // The un-notarized opening is one story now (gk-story); these single steps are no screen's picture.
+    'safari-settings': 'not on a screen (gk-story chapter 3): click Open Privacy & Security', 'safari-allow': 'not on a screen (gk-story chapter 3): click Allow',
+    'gk-notopened': 'not on a screen (gk-story chapter 2): click Done, not Move to Trash', 'gk-open': 'open-app confirm (notarized): click Open',
+    'gk-anyway': 'not on a screen (gk-story chapter 4): Open Anyway, Open Anyway, Touch ID',
+    'gk-story': 'open-app (un-notarized): open the download, Done, Open Privacy & Security, Allow, Open Anyway ×2, Touch ID',
+    'screen-prompt': 'allow-screen prompt: Open System Settings',
     'ax-prompt': 'allow-control prompt: Open System Settings', 'screen-list': 'allow-screen settings: turn on the switch',
     'ax-list': 'allow-control settings: turn on the switch', 'login-list': 'login: turn on the switch',
     'screen-reopen': 'allow-screen reopen: Quit & Reopen', 'bg-items': 'open-app setting-up: “Login Item Added”'
@@ -82,15 +90,20 @@
     return {
       dark: c.dark, accent: c.accent, host: P.get('host') || 'usbc.local', appName: 'USB-C Display',
       appSize: P.get('size') || '0.7 MB', appVersion: P.get('version') || '5', notarized: P.get('notarized') === '1',
-      frame: 'band', still: P.get('still') === '1', off: P.get('off') === '1'
+      frame: 'band', still: P.get('still') === '1', off: P.get('off') === '1',
+      fromChapter: P.get('from') !== null && P.get('from') !== '' ? Number(P.get('from')) : undefined
     };
   };
+  // A scene's chapters (tl.chapters: {row, start, end} as fractions of its loop), as a caption.
+  var chaptersOf = function (sc) { return sc && sc.tl && Array.isArray(sc.tl.chapters) ? sc.tl.chapters : null; };
+  var r2 = function (v) { return (Math.round(v * 100) / 100).toFixed(2); };
   var esc = function (t) { return String(t).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
 
   var grid = document.getElementById('grid');
   grid.style.setProperty('--n', cols.length);
   grid.insertAdjacentHTML('beforeend', '<div></div>' + cols.map(function (c) { return '<div class="kit-colh">' + (c.dark ? 'Dark' : 'Light') + ', ' + esc(c.accent) + '</div>'; }).join(''));
   var jobs = [];
+  var chapterLines = [];
   names.forEach(function (name) {
     var known = all.indexOf(name) >= 0;
     grid.insertAdjacentHTML('beforeend', '<div class="kit-name">' + esc(name) + '<small>' + esc(NOTES[name] || (known ? '' : 'not in macos.js')) + '</small></div>');
@@ -99,12 +112,18 @@
       var sc = null;
       try { sc = D.scenes.mac(name, opt(c)); } catch (e) { document.getElementById('err').textContent += name + ': ' + e.message + '\n'; }
       var cam = sc && sc.cam ? 's ' + sc.cam.s + ' · x ' + sc.cam.x + ' · y ' + sc.cam.y : '';
+      var ch = chaptersOf(sc);
+      if (ch && c === cols[0]) chapterLines.push(name + ' ' + ch.length);
+      var chCap = ch ? ' · ' + ch.map(function (x, i) { return 'ch' + (i + 1) + ' row ' + x.row + ' ' + r2(x.start) + '–' + r2(x.end); }).join(', ') +
+        (sc.tl.dur ? ' · ' + (sc.tl.dur / 1000).toFixed(1) + ' s' : '') : '';
       cell.innerHTML = '<div class="kit-band"><div class="band-canvas">' + (sc ? sc.html : '') + '</div></div>' +
-        '<div class="kit-cap">' + esc((sc && sc.family) || '') + (cam ? ' · ' + esc(cam) : '') + (sc && sc.poster != null ? ' · poster ' + sc.poster : '') + '</div>';
+        '<div class="kit-cap">' + esc((sc && sc.family) || '') + (cam ? ' · ' + esc(cam) : '') + (sc && sc.poster != null ? ' · poster ' + sc.poster : '') + esc(chCap) + '</div>';
       grid.appendChild(cell);
       if (sc) jobs.push([cell.querySelector('.band-canvas'), sc]);
     });
   });
+
+  document.getElementById('kit-chapters').textContent = chapterLines.join('\n');
 
   // Start every loop together once the fonts are in, so the pointer's targets are measured right.
   var fonts = document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve();
@@ -116,6 +135,12 @@
       var anims = [];
       try { anims = (D.playScene && sc.tl) ? D.playScene(canvas, sc.tl, t0) || [] : []; } catch (e) { document.getElementById('err').textContent += e.message + '\n'; }
       var frac = f !== null && f !== '' ? Number(f) : (P.get('poster') === '1' ? (sc.poster != null ? sc.poster : 0) : null);
+      // ?chapter=N&at=: a point inside the scene's Nth chapter (scenes without chapters keep frac).
+      var ch = chaptersOf(sc), cn = Number(P.get('chapter'));
+      if (ch && cn >= 1 && ch[cn - 1]) {
+        var at = P.get('at') !== null && P.get('at') !== '' ? Number(P.get('at')) : 0.5;
+        frac = ch[cn - 1].start + Math.max(0, Math.min(1, at)) * (ch[cn - 1].end - ch[cn - 1].start);
+      }
       if (frac === null || !anims.length) return;
       var dur = (sc.tl && sc.tl.dur) || 1000;
       anims.forEach(function (a) { a.pause(); a.currentTime = frac * dur + (a._shift || 0); });

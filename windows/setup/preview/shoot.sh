@@ -4,20 +4,25 @@
 #   subs/       every [screen, sub] of D.SUBS (steps.js), light and dark, 800 x 600 at ?mpt=1
 #   variants/   the §10.1 / §10.4 variants: standard account, signed, notarized, update, keyboard
 #               row, edge, pointer, the Mac's copy (?mac=1, pixel identity with ready/starting), inactive,
-#               and every Learn More… sheet over the screen that opens it
+#               the un-notarized open-app screen with rows 1-2 done (?settings=1), and every Learn
+#               More… sheet the page has over the screen that opens it
 #   accents/    every picture sub-state with the Purple and the Blue accent (the default shots take the
 #               accent as the host would know it: none from Safari, the Mac's once the app answers)
-#   frames/     every picture sub-state frozen at f=0.3 and f=0.6, light and dark
+#   frames/     every picture sub-state frozen at f=0.3 and f=0.6, light and dark; the un-notarized
+#               open-app screen (one story in four chapters) at f=0.1…0.9, and with rows 1-2 done
 #   scenarios/  every §10.3 scenario played to its end (?scenario=…&play=1, on virtual time):
 #               <name>.png is the last frame, <name>.json the mock's log; summary.txt says which
 #               ended where they must, with no backward flash and none of the mock's checks failed
 #               (problems: a permission screen going from settings to prompt; a hand-off hold that
 #               still asks for Yes after No; a status check whose work hasn't completed; a place
 #               the scenario must never show; a screen built before this PC is checked, a first
-#               frame that fades in, or 'shown' before that frame is whole)
+#               frame that fades in, or 'shown' before that frame is whole; the un-notarized open-app
+#               screen changing its sub or its rows' wording, or unchecking a row)
 #   fit/        D.debug.fit() for every sub-state at --mpt 1.25 and 1.5 (§10.2.5): fit-*.json, fit.txt
 #   safari/     the Safari download page (web/index.html), states a-d, light and dark
-#   kit/        preview/macos-kit.html: every Mac scene in band framing
+#   kit/        preview/macos-kit.html: every Mac scene in band framing; a story scene (tl.chapters)
+#               also near the start, at the middle and at the end of each chapter, and played from
+#               its last chapter on
 #   index.html  all of the above on one page
 #
 # Usage:  preview/shoot.sh [--only subs,variants,accents,frames,scenarios,fit,safari,kit] [filter]
@@ -117,7 +122,12 @@ pretext() { sed -n "s/.*<pre id=\"$2\"[^>]*>\\([^<]*\\)<\\/pre>.*/\\1/p" "$1" | 
 # ---------- Every [screen, sub] (D.SUBS, from the page itself) ----------
 SUBS="$TMP/subs.txt"
 run1 "_subs" dom "$UI?list=subs" 800,600 3000 light
-tr -d '\r' < "$OUT/_subs.dom.html" | tr '\n' '\v' | sed 's/.*<pre id="mock-subs"[^>]*>\([^<]*\)<\/pre>.*/\1/' | tr '\v' '\n' | grep -E '^[a-z-]+ [a-z-]+$' > "$SUBS" || true
+# The text of <pre id="$1"> in the dumped page $2, one line per entry.
+prelist() { [ -f "$2" ] && tr -d '\r' < "$2" | tr '\n' '\v' | sed "s/.*<pre id=\"$1\"[^>]*>\\([^<]*\\)<\\/pre>.*/\\1/" | tr '\v' '\n'; }
+prelist mock-subs "$OUT/_subs.dom.html" | grep -E '^[a-z-]+ [a-z-]+$' > "$SUBS" || true
+SHEETS="$(prelist mock-sheets "$OUT/_subs.dom.html" | grep -E '^[a-z0-9-]+$' | tr '\n' ' ')"
+# The un-notarized open-app screen: one sub from the download to the Mac app's answer.
+STORY="$(prelist mock-story "$OUT/_subs.dom.html" | grep -E '^[a-z-]+$' | head -1)"
 rm -f "$OUT/_subs.dom.html"
 if [ ! -s "$SUBS" ]; then
   echo "The page didn't list D.SUBS; using SPEC §3." >&2
@@ -155,10 +165,6 @@ get-app allow-downloads
 get-app downloading
 open-app downloads
 open-app confirm
-open-app not-opened
-open-app page-button
-open-app safari-allow
-open-app open-anyway
 open-app setting-up
 open-app setting-up-late
 move idle
@@ -185,7 +191,10 @@ ready error
 ready error-files
 EOF
 fi
-echo "$(wc -l < "$SUBS" | tr -d ' ') sub-states."
+[ -n "$STORY" ] || STORY="$(awk '$1 == "open-app" && $2 !~ /^(downloads|confirm|setting-up|setting-up-late)$/ { print $2; exit }' "$SUBS")"
+[ -n "$STORY" ] || STORY=downloads
+[ -n "$SHEETS" ] || SHEETS="permission cable mac-connect mac-respond safari screen control desktop"
+echo "$(wc -l < "$SUBS" | tr -d ' ') sub-states; un-notarized open-app: $STORY; sheets: $SHEETS"
 picture() { case "$1" in get-app|open-app|login|allow-screen|allow-control) return 0 ;; esac; return 1; }
 Q="mpt=$MPT&shot=1"
 
@@ -208,6 +217,8 @@ if want variants; then
     v get-app--address--update "step=get-app&sub=address&update=1" $th
     v get-app--download--update "step=get-app&sub=download&update=1" $th
     v open-app--downloads--notarized "step=open-app&sub=downloads&notarized=1" $th
+    v open-app--confirm--notarized "step=open-app&sub=confirm&notarized=1" $th
+    v "open-app--$STORY--settings" "step=open-app&sub=$STORY&settings=1" $th
     v ready--starting--input "step=ready&sub=starting&input=1" $th
     v ready--cut--mac "step=ready&sub=cut&mac=1" $th
     v ready--cut--mac--input "step=ready&sub=cut&mac=1&input=1" $th
@@ -223,19 +234,27 @@ if want variants; then
     v allow-pc--refused--standard "step=allow-pc&sub=refused&acct=standard" $th
     v connect--no-server--standard "step=connect&sub=no-server&acct=standard" $th
     v ready--showing--inactive "step=ready&sub=showing&inactive=1" $th
-    # Every Learn More… sheet, over the screen that opens it (the permission sheet also signed).
-    v sheet--permission "step=allow-pc&sub=pending&sheet=permission" $th
-    v sheet--permission--signed "step=allow-pc&sub=pending&signed=1&sheet=permission" $th
-    v sheet--cable "step=connect&sub=cable&sheet=cable" $th
-    v sheet--mac-connect "step=connect&sub=no-mac&sheet=mac-connect" $th
-    v sheet--mac-respond "step=unreachable&sub=help&sheet=mac-respond" $th
-    v sheet--safari "step=get-app&sub=address-hint&sheet=safari" $th
-    v sheet--gatekeeper "step=open-app&sub=not-opened&sheet=gatekeeper" $th
-    v sheet--open-anyway "step=open-app&sub=open-anyway&sheet=open-anyway" $th
-    v sheet--screen "step=allow-screen&sub=prompt&sheet=screen" $th
-    v sheet--control "step=keyboard&sub=offer&sheet=control" $th
-    v sheet--desktop "step=ready&sub=error&sheet=desktop" $th
-    v sheet--screen--inactive "step=allow-screen&sub=prompt&sheet=screen&inactive=1" $th
+    # Every Learn More… sheet the page has, over the screen that opens it (the permission sheet
+    # also signed; the open-app ones over the un-notarized screen, before and after Open
+    # Privacy & Security).
+    for id in $SHEETS; do
+      case "$id" in
+        permission) v sheet--permission "step=allow-pc&sub=pending&sheet=permission" $th
+                    v sheet--permission--signed "step=allow-pc&sub=pending&signed=1&sheet=permission" $th ;;
+        cable) v sheet--cable "step=connect&sub=cable&sheet=cable" $th ;;
+        mac-connect) v sheet--mac-connect "step=connect&sub=no-mac&sheet=mac-connect" $th ;;
+        mac-respond) v sheet--mac-respond "step=unreachable&sub=help&sheet=mac-respond" $th ;;
+        safari) v sheet--safari "step=get-app&sub=address-hint&sheet=safari" $th ;;
+        gatekeeper) v sheet--gatekeeper "step=open-app&sub=$STORY&sheet=gatekeeper" $th ;;
+        open-anyway) v sheet--open-anyway "step=open-app&sub=$STORY&settings=1&sheet=open-anyway" $th ;;
+        screen) v sheet--screen "step=allow-screen&sub=prompt&sheet=screen" $th
+                v sheet--screen--inactive "step=allow-screen&sub=prompt&sheet=screen&inactive=1" $th ;;
+        control) v sheet--control "step=keyboard&sub=offer&sheet=control" $th ;;
+        desktop) v sheet--desktop "step=ready&sub=error&sheet=desktop" $th ;;
+        *) [ "$th" = light ] && echo "  sheet $id: no screen known for it here, shot over the un-notarized open-app screen" >&2
+           v "sheet--$id" "step=open-app&sub=$STORY&sheet=$id" $th ;;
+      esac
+    done
   done
   runall
 fi
@@ -255,15 +274,22 @@ if want frames; then
   echo "frames/"
   while read -r s u; do
     picture "$s" || continue
-    for f in 0.3 0.6; do for th in light dark; do
-      add "frames/$s--$u--f$f--$th" shot "$UI?step=$s&sub=$u&theme=$th&f=$f&mpt=$MPT" 800,600 3000 "$th"
+    fs="0.3 0.6"
+    # The un-notarized open-app story: four chapters in one loop, so more frames.
+    [ "$s" = open-app ] && [ "$u" = "$STORY" ] && fs="0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9"
+    for f in $fs; do for th in light dark; do
+      add "frames/$s--$u--f$f--$th" shot "$UI?step=$s&sub=$u&theme=$th&f=$f&mpt=$MPT&shot=1" 800,600 3000 "$th"
     done; done
   done < "$SUBS"
+  # ... and with rows 1-2 done, when only the last chapter plays.
+  for f in 0.2 0.5 0.8; do for th in light dark; do
+    add "frames/open-app--$STORY--settings--f$f--$th" shot "$UI?step=open-app&sub=$STORY&settings=1&theme=$th&f=$f&mpt=$MPT&shot=1" 800,600 3000 "$th"
+  done; done
   runall
 fi
 
 SCENARIOS="first-run first-run-standard uac-refused rerun-downloaded cable-late mac-not-found unplug-blip search-page
-  allow-downloads move-to-trash back-to-safari notarized relaunch relaunch-late prompt-closed keyboard-yes keyboard-no
+  allow-downloads move-to-trash back-to-safari done-focus focus-noise focus-noise-cleared download-again mac-ping notarized relaunch relaunch-late prompt-closed keyboard-yes keyboard-no
   mac-asleep ready-inactive ctrl-alt-esc display-error refused-black second-mac outdated-mac incomplete unsupported returning
   install-error login-off move uac-failed tasks-failed rerun-downloaded-ready handoff-hold handoff-hold-inactive"
 if want scenarios; then
@@ -286,7 +312,7 @@ if want scenarios; then
     ok="$(printf '%s' "$j" | grep -o '"ok":[a-z]*' | head -1 | cut -d: -f2)"
     fl="$(printf '%s' "$j" | grep -o '"flashes":\[[^]]*\]' | head -1 | sed 's/"flashes":\[\(.*\)\]/\1/')"
     wa="$(printf '%s' "$j" | grep -o '"welcomeAfterStart":[a-z]*' | cut -d: -f2)"
-    path="$(printf '%s' "$j" | grep -o '"place":"[^"]*"' | cut -d'"' -f4 | tr '\n' ' ')"
+    path="$(printf '%s' "$j" | grep -o '"transitions":\[[^]]*\]' | head -1 | grep -o '"place":"[^"]*"' | cut -d'"' -f4 | tr '\n' ' ')"
     pr="$(printf '%s' "$j" | grep -o '"problems":\[[^]]*\]' | head -1 | sed 's/"problems":\[\(.*\)\]/\1/')"
     verdict=PASS
     { [ "$ok" = true ] && [ -z "$fl" ] && [ "$wa" != true ] && [ -z "$pr" ]; } || verdict=FAIL
@@ -333,7 +359,9 @@ fi
 if want kit; then
   echo "kit/"
   run1 "_kit" dom "$KIT" 800,600 4000 light
-  NAMES="$(tr -d '\r' < "$OUT/_kit.dom.html" | tr '\n' '\v' | sed 's/.*<pre id="kit-names"[^>]*>\([^<]*\)<\/pre>.*/\1/' | tr '\v' '\n' | grep -E '^[a-z0-9-]+$' || true)"
+  NAMES="$(prelist kit-names "$OUT/_kit.dom.html" | grep -E '^[a-z0-9-]+$' || true)"
+  # Scenes told in chapters ("name count"), such as the un-notarized open-app story.
+  CHAPTERS="$(prelist kit-chapters "$OUT/_kit.dom.html" | grep -E '^[a-z0-9-]+ [0-9]+$' || true)"
   rm -f "$OUT/_kit.dom.html"
   # The whole grid (k=0.5: Dark and Light, Purple and Blue), at the poster frames and mid-loop.
   add "kit/all--poster" shot "$KIT?poster=1&theme=dark" 1900,3300 8000 dark
@@ -344,6 +372,22 @@ if want kit; then
     add "kit/$n--dark-purple" shot "$KIT?scene=$n&cols=dark:purple&poster=1&theme=dark" 1080,470 4000 dark
     add "kit/$n--light-blue" shot "$KIT?scene=$n&cols=light:blue&poster=1&theme=light" 1080,470 4000 light
   done
+  # Each chapter of a story scene near its start, at its middle and at its end (the click's result
+  # still showing), and the scene played from its last chapter only (opt.fromChapter, 0-based in
+  # tl.chapters: what the window plays once the earlier rows are done).
+  while read -r n c; do
+    [ -n "$n" ] || continue
+    for i in $(seq 1 "$c"); do
+      for at in 0.15 0.5 0.9; do
+        add "kit/$n--ch$i-$at--dark-purple" shot "$KIT?scene=$n&cols=dark:purple&chapter=$i&at=$at&theme=dark" 1080,470 4000 dark
+      done
+      add "kit/$n--ch$i-0.5--light-blue" shot "$KIT?scene=$n&cols=light:blue&chapter=$i&at=0.5&theme=light" 1080,470 4000 light
+    done
+    last=$((c - 1))
+    for f in 0.2 0.5 0.8; do
+      add "kit/$n--from$last-f$f--dark-purple" shot "$KIT?scene=$n&cols=dark:purple&from=$last&f=$f&theme=dark" 1080,470 4000 dark
+    done
+  done <<< "$CHAPTERS"
   runall
 fi
 

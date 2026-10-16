@@ -61,7 +61,7 @@
   .icon { display: block; width: 128px; height: 128px; margin: 0 auto; -webkit-user-drag: none; -webkit-user-select: none; user-select: none; }
   h1 { margin: 16px 0 0; font-size: 26px; line-height: 32px; font-weight: 700; letter-spacing: -0.01em; color: var(--label); }
   .line { margin: 6px 0 0; font-size: 17px; line-height: 22px; font-weight: 400; color: var(--label-2); }
-  .line b { font-weight: 600; }
+  .line b { font-weight: 600; white-space: nowrap; }
   /* A name is never split across two lines (“USB-C Display”, “Move to Trash”). */
   .nw { white-space: nowrap; }
   html[data-notarized="true"] .un { display: none; }
@@ -103,7 +103,7 @@
   <h1>USB-C Display</h1>
 
   <p class="line st a">Use your Windows PC as a display for this Mac.</p>
-  <p class="line st b" hidden>Open USB-C Display from Safari’s Downloads.<span class="un"> When your Mac says it can’t verify the app, click <b>Done</b>, not <span class="nw">Move to Trash</span>.</span></p>
+  <p class="line st b" hidden>Double-click <b>USB-C-Display.zip</b> in Safari’s Downloads, then double-click <b>USB-C Display</b>.<span class="un"> When your Mac says it can’t verify the app, click <b>Done</b>, not <span class="nw">Move to Trash</span>.</span></p>
   <p class="line st c" hidden>To open USB-C Display, allow it in Privacy &amp; Security.</p>
   <p class="line st d" hidden>This copy of USB-C Display Setup doesn’t include <span class="nw">USB-C Display</span> for Mac. Download <span class="nw">USB-C Display Setup</span> again on your PC.</p>
 
@@ -120,6 +120,9 @@
   </div>
 
   <p class="meta st a b">{{SIZE}} · Comes from your PC through the cable, not from the internet.</p>
+  <!-- Right before the Mac's two warnings (Not Opened, then the confirmation): why it asks. One
+       line, so macos.js page() keeps its geometry (page C's heading below the Safari camera). -->
+  <p class="meta st c" hidden>Your Mac does this for every app that Apple hasn’t verified.</p>
 </main>
 <p class="foot" hidden>Safari shows “Not Secure” because this page comes from your PC through the cable, not from a website.</p>
 <i id="accent-probe" hidden></i>

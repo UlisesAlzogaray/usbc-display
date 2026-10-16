@@ -375,7 +375,7 @@ html.shot .mk .mat { animation: none; }
 .mk .mk-page .icon svg { width: 128px; height: 128px; }
 .mk .mk-page h1 { margin: 16px 0 0; font: 700 25.18px/32px "MK Text", system-ui; letter-spacing: -0.0016em; color: var(--pg-tx); }
 .mk .mk-page .pl { margin: 6px 0 0; font: 400 16.46px/22px "MK Text", system-ui; letter-spacing: -0.0063em; color: var(--pg-muted); }
-.mk .mk-page .pl b { font-weight: 600; }
+.mk .mk-page .pl b { font-weight: 600; white-space: nowrap; }
 .mk .mk-page .nw { white-space: nowrap; }
 /* Under the Gatekeeper alerts (family "alert") the page's sentence and meta
    line aren't drawn: scraps of them around the alert would repeat its words. */
@@ -409,6 +409,43 @@ html.shot .mk .mat { animation: none; }
 .mk .mk-pop2 .it .mg { margin-left: auto; width: 17px; height: 17px; color: var(--tx2); }
 .mk .mk-pop2 .it .mk-hl { position: absolute; inset: 0; border-radius: inherit; background: var(--ac); opacity: 0; }
 .mk .mk-pop2 .it > :not(.mk-hl) { position: relative; }
+
+/* ---------- Finder: Downloads in icon view (the story's first chapter) ----------
+   The window family of System Settings: the same sidebar, toolbar capsule and
+   title; the file area in the content background, as Finder draws it. */
+.mk .mk-fd { background: var(--pg-bg); }
+.mk .mk-fd .fd-side { position: absolute; left: 0; top: 0; bottom: 0; width: 176px; background: var(--side); }
+.mk .mk-fd .fd-hd { position: absolute; left: 19px; font: 700 11px/14px "MK Text", system-ui; letter-spacing: 0.01em; color: var(--tx2); white-space: nowrap; }
+.mk .mk-fd .fd-si { position: absolute; left: 0; width: 176px; height: 28px; font: var(--f13); line-height: 28px; color: var(--tx-strong); white-space: nowrap; }
+.mk .mk-fd .fd-si i { position: absolute; left: 19px; top: 6px; width: 16px; height: 16px; color: var(--ac); }
+.mk .mk-fd .fd-si i svg { width: 16px; height: 16px; }
+.mk .mk-fd .fd-si span { position: absolute; left: 43px; top: 0; }
+.mk .mk-fd .fd-si.sel::before { content: ""; position: absolute; left: 10px; right: 10px; top: 0; height: 28px; border-radius: 7.5px; background: var(--sel); }
+.mk .mk-fd.off .fd-si { color: var(--tx2); }
+.mk .mk-fd.off .fd-si i { color: var(--tx2); }
+.mk .mk-fd.off .fd-si.sel::before { background: var(--sel-off); }
+.mk .mk-fd .fd-main { position: absolute; left: 176px; top: 0; right: 0; bottom: 0; overflow: hidden; }
+.mk .mk-fd .mk-tb .pill { position: absolute; top: 8.5px; height: 35px; border-radius: 17.5px; background: var(--capsule); box-shadow: 0 0 0 0.5px var(--capsule-line), inset 0 0.75px 0 rgba(255, 255, 255, 0.14); color: var(--tx-strong); display: flex; align-items: center; justify-content: center; gap: 5px; }
+.mk.light .mk-fd .mk-tb .pill { box-shadow: 0 0 0 0.5px var(--capsule-line), 0 1px 3px rgba(0, 0, 0, 0.07), inset 0 0.75px 0 #fff; }
+.mk .mk-fd .mk-tb .pill svg { width: 16px; height: 16px; }
+.mk .mk-fd .mk-tb .pill svg.dn { width: 9px; height: 6px; }
+.mk .mk-fd .mk-tb .fv { right: 52px; width: 58px; }
+.mk .mk-fd .mk-tb .fs { right: 10px; width: 35px; }
+.mk .mk-fd .mk-tb .fs svg { width: 14px; height: 14px; }
+.mk .mk-fd.off .mk-tb .ttl { color: var(--title-off); }
+.mk .mk-fd.off .mk-tb .bf .b, .mk .mk-fd.off .mk-tb .pill { color: var(--chev); }
+/* An item: a 64 pt icon over its name. Selected (as Archive Utility leaves
+   the app it made): a grey square behind the icon and the name on the accent
+   capsule; grey when Finder isn't the active app. */
+.mk .mk-fd .fd-it { position: absolute; width: 112px; display: flex; flex-direction: column; align-items: center; }
+.mk .mk-fd .fd-it .fic { width: 74px; height: 74px; padding: 5px; border-radius: 8px; }
+.mk .mk-fd .fd-it .fic svg { width: 64px; height: 64px; }
+.mk .mk-fd .fd-it .fl { margin-top: 3px; padding: 0 5px; border-radius: 4px; font: 400 12px/16px "MK Text", system-ui; letter-spacing: 0; color: var(--tx); white-space: nowrap; }
+.mk.dark .mk-fd .fd-it.sel .fic { background: rgba(255, 255, 255, 0.1); }
+.mk.light .mk-fd .fd-it.sel .fic { background: rgba(0, 0, 0, 0.07); }
+.mk .mk-fd .fd-it.sel .fl { background: var(--ac); color: var(--ac-tx); }
+.mk.dark .mk-fd.off .fd-it.sel .fl { background: rgba(255, 255, 255, 0.16); color: var(--tx); }
+.mk.light .mk-fd.off .fd-it.sel .fl { background: rgba(0, 0, 0, 0.1); color: var(--tx); }
 
 /* ---------- Notification banner (glass) ---------- */
 .mk .mk-note-b { position: absolute; width: 344px; border-radius: 22px; padding: 12px 14px 12px 12px; background: var(--glass); backdrop-filter: blur(24px) saturate(1.8); box-shadow: 0 0 0 0.5px var(--glass-line), 0 10px 30px rgba(0, 0, 0, 0.28), inset 0 0.75px 0 var(--glass-hi); display: flex; gap: 10px; color: var(--tx-strong); z-index: 20; }

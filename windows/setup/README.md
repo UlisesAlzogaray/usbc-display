@@ -18,7 +18,7 @@ left. A first-time run (Mac app not notarized, cable not yet connected) shows ei
 | 2 | Allow Changes on This PC (`allow-pc`: installing → waiting → pending → working → done, the hand-off) | this PC | Windows' **Yes** | |
 | 3 | Connect Your Mac (`connect`: cable → finding) | this PC | connect the cable | maybe **Allow** (accessory) |
 | 4 | Get USB-C Display on Your Mac (`get-app`: address → download → allow-downloads → downloading) | a picture of the Mac | | Safari, type `usbc.local`, **Download**, maybe **Allow** |
-| 5 | Open USB-C Display on Your Mac (`open-app`: downloads → not-opened → page-button → safari-allow → open-anyway) | a picture of the Mac | | Downloads, double-click, **Done**, **Open Privacy & Security**, **Allow**, **Open Anyway** twice, Touch ID |
+| 5 | Open USB-C Display on Your Mac (`open-app`: one screen, `steps`, until the Mac app answers: one story picture over three numbered steps; notarized: downloads → confirm) | a picture of the Mac | | Downloads, the zip, the app, **Done**, **Open Privacy & Security**, **Allow**, **Open Anyway**, **Open Anyway** again, Touch ID |
 | 6 | Allow Screen Recording on Your Mac (`allow-screen`: prompt → settings → reopen) | a picture of the Mac | | **Open System Settings**, the switch, Touch ID, maybe **Quit & Reopen** |
 | 7 | Use This PC’s Keyboard and Trackpad (`keyboard`: offer; then `allow-control` if yes) | this PC, then the Mac | **Continue** or **Not Now** | **Open System Settings**, the switch, Touch ID |
 | 8 | USB-C Display Is Ready to Use (`ready`: starting → cut → showing) | this PC, then the Mac's copy | | move the pointer onto this display, **Done** |
@@ -88,7 +88,9 @@ opens on the first screen still needed.
   `usbc.local` on the cable only. `server.urlReady` turns true once the Mac is on the link;
   `server.error = 'port'` if another program holds port 80. The page in Safari reports its focus,
   the Download and Privacy & Security clicks and the Mac's look, so the window follows what the
-  person does in Safari without seeing the Mac's screen.
+  person does in Safari without seeing the Mac's screen. While the Mac app is being opened, only
+  the clicks count (the first two steps are checked once Open Privacy & Security is clicked, and
+  stay checked): Safari's focus is too noisy to steer the screen.
 - **The Mac app.** The host connects to the Mac's port 48100 over the cable and asks for its
   status (CONTRACT.md section 1), again every 2 s if it isn't there; the Mac reports every change
   within about a quarter second. An app that closes the connection on the question is an older

@@ -12,11 +12,18 @@
 // the words quote macOS, because that is what the person sees on the Mac.
 //
 // opt = { dark, accent, host, appName, appSize, appBytes, appVersion,
-//         notarized, frame: 'band', still, off }
+//         notarized, frame: 'band', still, off, fromChapter, fromRow }
 //   appSize: the page's own size text ("0.7 MB"); appBytes: the size in bytes,
 //   which Safari's Downloads list writes the Mac's way ("660 KB").
 //   still: frozen at poster, no pointer.  off: list scenes show the switch
 //   off, with no pointer.  Use key (not html) to tell scenes apart.
+//   fromChapter (gk-story): the first chapter to play, 0-based (chapters teach
+//   rows D.scenes.mac.story.rows = [1, 2, 2, 3]); fromRow: the same, as the
+//   first row not yet done. The story's tl.chapters lists the chapters it
+//   plays: {index, row, start, end, poster} as fractions of its loop (the
+//   short outro back to the start is in none); its family names that range,
+//   so another range crossfades in. tl.stills: a frame per click, the
+//   pointer resting on its target (stepped through when motion is reduced).
 (function () {
   'use strict';
   const D = (window.USBC = window.USBC || {});
@@ -87,6 +94,19 @@
         : '<path d="M41.2 47.4h4.4l1.4 1.6h3.4M41.2 47.4v10.4h12.6v-5.6" fill="none" stroke="#fff" stroke-opacity=".92" stroke-width="1.15" stroke-linejoin="round"/><path d="M42.6 50.4h6.6" stroke="#fff" stroke-opacity=".9" stroke-width="1"/>' +
           '<circle cx="54.6" cy="48.4" r="2.4" fill="none" stroke="#fff" stroke-width="2.3" stroke-dasharray="1.05 .85"/><circle cx="54.6" cy="48.4" r="1.6" fill="#fff"/><circle cx="54.6" cy="48.4" r=".8" fill="#2a7ff2"/>') +
       '</svg>';
+  }
+
+  // A zip archive: a white page with its corner folded, a zipper down the top
+  // half and "ZIP" near the foot (what Finder and Safari show for a .zip).
+  function zipIcon() {
+    const p = nid('p');
+    let teeth = '';
+    for (let i = 0, y = 5.4; y < 27; i++, y += 2.15) teeth += '<rect x="' + (i % 2 ? 32 : 29.4) + '" y="' + y.toFixed(2) + '" width="2.6" height="1.25" rx=".4"/>';
+    return '<svg viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="' + p + '" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#ececef"/></linearGradient></defs>' +
+      '<path d="M15 4.5H40L51.5 16V57A2.5 2.5 0 0 1 49 59.5H15A2.5 2.5 0 0 1 12.5 57V7A2.5 2.5 0 0 1 15 4.5Z" fill="url(#' + p + ')" stroke="#000" stroke-opacity=".22" stroke-width=".7"/>' +
+      '<path d="M40 4.5V13.5A2.5 2.5 0 0 0 42.5 16H51.5Z" fill="#d9d9de" stroke="#000" stroke-opacity=".18" stroke-width=".7" stroke-linejoin="round"/>' +
+      '<g fill="#7c7c82">' + teeth + '</g><rect x="29" y="27.6" width="6" height="9.4" rx="1.8" fill="#86868c"/><rect x="30.7" y="31.6" width="2.6" height="3.4" rx=".9" fill="#f4f4f6"/>' +
+      '<text x="32" y="52.6" text-anchor="middle" font-family="MK Text, system-ui, sans-serif" font-weight="700" font-size="8.6" letter-spacing=".5" fill="#8e8e93">ZIP</text></svg>';
   }
 
   // A grey gear (System Settings and its notifications).
@@ -288,19 +308,21 @@
       line = 'Use your Windows PC as a display for this Mac.';
       act = '<span class="cap pri' + T + '">Download</span>';
     } else if (st === 'B') {
-      line = 'Open ' + n + ' from Safari’s Downloads.' + (o.notarized ? '' : ' When your Mac says it can’t verify the app, click <b>Done</b>, not <span class="nw">Move to Trash</span>.');
+      line = 'Double-click <b>' + zipName(o) + '</b> in Safari’s Downloads, then double-click <b>' + n + '</b>.' + (o.notarized ? '' : ' When your Mac says it can’t verify the app, click <b>Done</b>, not <span class="nw">Move to Trash</span>.');
       act = '<span class="cap sec">Download Again</span>';
     } else {
       line = 'To open ' + n + ', allow it in Privacy &amp; Security.';
       act = '<span class="cap pri' + T + '">Open Privacy &amp; Security</span><p class="nt">If you clicked Move to Trash, click Download Again.</p><span class="cap sec">Download Again</span>';
-      foot = '';
+      // The calm line under the buttons, right before the Mac's two warnings. One line: page C's
+      // heading then sits below the Safari camera's lower edge.
+      foot = '<p class="meta">Your Mac does this for every app that Apple hasn’t verified.</p>';
     }
     return '<div class="mk-page st-' + st + (cls ? ' ' + cls : '') + '"><main><div class="icon">' + appIcon() + '</div><h1>' + n + '</h1><p class="pl">' + line + '</p><div class="act">' + act + '</div>' + foot + '</main></div>';
   }
-  // cfg: { addr (the address field area), page, off, dl (downloads button), extra }
+  // cfg: { addr (the address field area), page, off, dl (downloads button), extra, cls, h (another height) }
   function safariWin(o, cfg) {
     const right = '<div class="pill" style="right:12px;width:' + (cfg.dl ? 142 : 108) + 'px;justify-content:space-around;padding:0 4px">' + (cfg.dl ? '<span class="dlb">' + GL.dlcircle + '</span>' : '') + GL.share + GL.newtab + GL.tabs + '</div>';
-    return '<div class="mk-win mk-saf' + (cfg.off ? ' off' : '') + '" style="' + at(SAF.x, SAF.y, SAF.w, SAF.h) + '"><div class="vp">' + cfg.page + '</div>' +
+    return '<div class="mk-win mk-saf' + (cfg.off ? ' off' : '') + (cfg.cls ? ' ' + cfg.cls : '') + '" style="' + at(SAF.x, SAF.y, SAF.w, cfg.h || SAF.h) + '"><div class="vp">' + cfg.page + '</div>' +
       '<div class="stb">' + lights + '<div class="pill" style="left:92px;width:112px;justify-content:space-between;padding:0 3px">' + GL.sidebar + '<span style="display:flex">' + GL.back.replace('<svg', '<svg style="width:9px;height:15px;margin:0 8px"') + '<span class="fd">' + GL.fwd.replace('<svg', '<svg style="width:9px;height:15px;margin:0 8px"') + '</span></span></div>' +
       cfg.addr + right + '</div>' + (cfg.extra || '') + '</div>';
   }
@@ -310,6 +332,33 @@
   // sheet, so no icon and the lighter sheet card (V8: verify on the Mac).
   const safariSheet = (title, body, cls) => '<div class="mk-dim" style="top:52px"></div>' +
     alertBox({ x: SAF.w / 2 - 130, y: 64, cls: 'dlg mat sheet ' + (cls || ''), icon: '', title, body, row: true, buttons: [['Cancel', ''], ['Allow', 'def tgt']] });
+
+  // ---------- Finder ----------
+  // A Downloads window in icon view, as Archive Utility leaves it after
+  // expanding the zip: the app it made is selected next to the zip. Sidebar
+  // symbols are line drawings in the accent colour, as Finder draws them.
+  const FSYM = {
+    airdrop: '<circle cx="8" cy="8.6" r="1.5" fill="currentColor" stroke="none"/><path d="M5.1 11.9a4.4 4.4 0 1 1 5.8 0M3 14a7.2 7.2 0 1 1 10 0"/>',
+    recents: '<circle cx="8" cy="8" r="6.2"/><path d="M8 4.5V8l2.5 1.5"/>',
+    apps: '<path d="M5.3 13.6L9.3 3.4M10.7 13.6L6.7 3.4M3.4 10.2h9.2"/>',
+    desktop: '<rect x="1.8" y="2.6" width="12.4" height="8.6" rx="1.5"/><path d="M5.8 13.8h4.4M8 11.2v2.6"/>',
+    docs: '<path d="M4 1.8h5.1L12.2 5v9.2H4z"/><path d="M9 1.9v3.2h3.1"/>',
+    downloads: '<circle cx="8" cy="8" r="6.2"/><path d="M8 4.6v6.2M5.5 8.4L8 10.9l2.5-2.5"/>',
+  };
+  const fsym = (n) => '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">' + FSYM[n] + '</svg>';
+  const FINDER_TOOLS = '<div class="pill fv"><svg viewBox="0 0 17 17"><g fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2.2" y="2.2" width="5.2" height="5.2" rx="1.3"/><rect x="9.6" y="2.2" width="5.2" height="5.2" rx="1.3"/><rect x="2.2" y="9.6" width="5.2" height="5.2" rx="1.3"/><rect x="9.6" y="9.6" width="5.2" height="5.2" rx="1.3"/></g></svg>' +
+    '<svg class="dn" viewBox="0 0 9 6"><path d="M1.2 1.4L4.5 4.6l3.3-3.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="pill fs">' + GL.mag + '</div>';
+  const zipName = (o) => esc(o.appName.replace(/\s+/g, '-')) + '.zip';
+  // cfg: { x, y, w, h, off, cls }
+  function finderWin(o, cfg) {
+    const fav = [['airdrop', 'AirDrop'], ['recents', 'Recents'], ['apps', 'Applications'], ['desktop', 'Desktop'], ['docs', 'Documents'], ['downloads', 'Downloads']];
+    const side = '<div class="fd-side"><div class="fd-hd" style="top:52px">Favorites</div>' +
+      fav.map((r, i) => '<div class="fd-si' + (r[0] === 'downloads' ? ' sel' : '') + '" style="top:' + (70 + i * 28) + 'px"><i>' + fsym(r[0]) + '</i><span>' + r[1] + '</span></div>').join('') + lights + '</div>';
+    const item = (cls, icon, name, x) => '<div class="fd-it ' + cls + '" style="left:' + x + 'px;top:62px"><div class="fic">' + icon + '</div><span class="fl">' + name + '</span></div>';
+    const tb = '<div class="mk-tb"><div class="bf"><span class="b">' + GL.back + '</span><i></i><span class="f">' + GL.fwd + '</span></div><div class="ttl">Downloads</div>' + FINDER_TOOLS + '</div>';
+    return '<div class="mk-win mk-fd' + (cfg.off ? ' off' : '') + (cfg.cls ? ' ' + cfg.cls : '') + '" style="' + at(cfg.x, cfg.y, cfg.w, cfg.h) + '">' + side +
+      '<div class="fd-main">' + item('fi-app sel', appIcon(), esc(o.appName), 14) + item('fi-zip', zipIcon(), zipName(o), 126) + tb + '</div></div>';
+  }
 
   // ---------- Desktop ----------
   // The Mac's clock: the time now, so the picture matches the person's own
@@ -387,9 +436,9 @@
   // The whole window width with its toolbar and the top of the page.
   const CAM_SAF = { x: 286, y: 100, s: 0.85 };
   // The page column: state A/B from the icon to the meta line; state C from
-  // the icon down to Download Again (the crop falls through the icon).
+  // the icon down to its meta line (the crop falls through the icon).
   const CAM_COL_A = { x: 286, y: 319.5, s: 0.85 };
-  const CAM_COL_C = { x: 286, y: 319.5, s: 0.85 };
+  const CAM_COL_C = { x: 286, y: 336, s: 0.85 };
 
   def('safari-type', 'safari', function (o) {
     const host = o.host;
@@ -438,24 +487,8 @@
 
   // A size the way the Mac writes it (ByteCountFormatter, decimal): 660 KB, 1.2 MB.
   const macSize = (b) => (b < 1e3 ? b + ' bytes' : b < 999.5e3 ? Math.round(b / 1e3) + ' KB' : (b / 1e6).toFixed(1).replace(/\.0$/, '') + ' MB');
-  // The Downloads button, then a double-click on the app in its list (the
-  // tip rests right of the name, so the name stays readable).
-  def('safari-open', 'safari', function (o) {
-    const size = o.appBytes ? macSize(o.appBytes) : esc(o.appSize);
-    const pop = '<div class="mk-pop2 pv" style="' + at(SAF.w - 12 - 330, 58) + '"><div class="hd">Downloads<span>Clear</span></div><div class="it tgt"><i class="mk-hl"></i><i class="ic">' + appIcon() + '</i><div><b>' + esc(o.appName) + '</b>' + (size ? '<span>' + size + '</span>' : '') + '</div><span class="mg">' + GL.mag + '</span></div></div>';
-    const tl = {
-      dur: 8000,
-      vis: [['.pv', [[0.3, 0.95]], 'pop']],
-      cursor: [[0.04, '.dlb', -120, 110, EASE], [0.16, '.dlb'], [0.32, '.dlb', 0, 0, EASE], [0.46, '.tgt', 12, 0], [0.95, '.tgt', 12, 0]],
-      cursorVis: [[0.04, 0.95]],
-      halo: [['.dlb', 0.15, 0.27], ['.tgt', 0.48, 0.62]],
-      clicks: [[0.27, '.dlb'], [0.62, '.tgt', 12, 0], [0.665, '.tgt', 12, 0]],
-      anim: [press(o, '.dlb', 0.27),
-        ['.tgt .mk-hl', [{ offset: 0, opacity: 0 }, { offset: 0.62, opacity: 0 }, { offset: 0.625, opacity: 1 }, { offset: 0.9, opacity: 1 }, { offset: 0.91, opacity: 0 }, { offset: 1, opacity: 0 }]],
-        ['.tgt b, .tgt span', [{ offset: 0, color: 'var(--tx)' }, { offset: 0.62, color: 'var(--tx)' }, { offset: 0.625, color: '#fff' }, { offset: 0.9, color: '#fff' }, { offset: 0.91, color: 'var(--tx)' }, { offset: 1, color: 'var(--tx)' }]]],
-    };
-    return { cam: CAM_SAF, layers: safariWin(o, { addr: addrIdle(o.host), page: page(o, 'B'), dl: true, extra: pop }), tl, poster: 0.56 };
-  });
+  // 'safari-open' (the Downloads list, then the app) is the story's first
+  // chapter on its own: see 'gk-story' below.
 
   // The page after a blocked open: its button opens Privacy & Security.
   def('safari-settings', 'safari', function (o) {
@@ -477,10 +510,12 @@
   const safariBehind = (o) => safariWin(o, { addr: addrIdle(o.host), page: page(o, 'B'), dl: true, off: true });
 
   // Gatekeeper: "Not Opened". The highlighted button is Move to Trash; the one to click is Done.
+  const notOpenedBox = (o, cls, done) => alertBox({ cls, icon: vaultIcon(), help: true,
+    title: isDefault(o) ? q(appApp(o)) + '<br>Not Opened' : q(appApp(o)) + ' Not Opened',
+    body: [isDefault(o) ? 'Apple could not verify “USB-C<br>Display.app” is free of malware that<br>may harm your Mac or compromise<br>your privacy.' : 'Apple could not verify ' + q(appApp(o)) + ' is free of malware that may harm your Mac or compromise your privacy.'],
+    buttons: [['Move to Trash', 'def'], ['Done', done]] });
   def('gk-notopened', 'alert', function (o) {
-    const body = isDefault(o) ? 'Apple could not verify “USB-C<br>Display.app” is free of malware that<br>may harm your Mac or compromise<br>your privacy.' : 'Apple could not verify ' + q(appApp(o)) + ' is free of malware that may harm your Mac or compromise your privacy.';
-    const title = isDefault(o) ? q(appApp(o)) + '<br>Not Opened' : q(appApp(o)) + ' Not Opened';
-    const dlg = alertBox({ cls: 'dlg mat', icon: vaultIcon(), title, body: [body], help: true, buttons: [['Move to Trash', 'def'], ['Done', 'tgt']] });
+    const dlg = notOpenedBox(o, 'dlg mat', 'tgt');
     const tl = clickLoop(o, '.tgt', { click: 0.5, from: [170, 30] });
     return { cam: CAM_AL, layers: safariBehind(Object.assign({}, o, { notarized: false })) + centred(CAM_AL, dlg), tl, poster: 0.42 };
   });
@@ -506,10 +541,11 @@
 
   // Open Anyway, three parts on one camera (20 s): the pane's button; the
   // confirmation; Touch ID or the password, then Modify Settings.
+  const confirmBox = (o) => alertBox({ cls: 'dlg-c', icon: vaultIcon(), title: 'Open ' + q(appApp(o)) + '?', help: true,
+    body: ['Apple is not able to verify that it is free from malware that could harm your Mac or compromise your privacy. Don’t open this unless you are certain it is from a trustworthy source.'],
+    buttons: [['Open Anyway', 'def t2'], ['Done', '']] });
   def('gk-anyway', 'settings', function (o) {
-    const confirm = alertBox({ cls: 'dlg-c', icon: vaultIcon(), title: 'Open ' + q(appApp(o)) + '?', help: true,
-      body: ['Apple is not able to verify that it is free from malware that could harm your Mac or compromise your privacy. Don’t open this unless you are certain it is from a trustworthy source.'],
-      buttons: [['Open Anyway', 'def t2'], ['Done', '']] });
+    const confirm = confirmBox(o);
     const auth = authBox('dlg-a', 't3');
     // The password dialog sits 15 pt lower, below the toolbar's title and the row under it.
     const layers = winSecurity(o, true, 'w-off') + winSecurity(o, false, 'w-on', 't1') + centred(CAM_SET, confirm) + centred(CAM_SET, auth, 15);
@@ -529,6 +565,295 @@
     };
     return { cam: CAM_SET, layers, tl, poster: 0.18 };
   });
+
+  // ---- The story (gk-story): from the finished download to Open Anyway ----
+  // One calm loop instead of one sub-state per step. Four chapters, each drawn
+  // with the replicas above:
+  //   0 (row 1) Safari's Downloads list shows the zip as Safari leaves it
+  //     ("USB-C-Display.zip", an archive icon). A double-click expands it:
+  //     Archive Utility reveals what it made, so Finder comes forward on
+  //     Downloads with "USB-C Display" selected next to the zip (V21), and that
+  //     app is double-clicked. Safari, behind Finder now, has lost the focus,
+  //     so its page turns to state C there (web/index.html does on blur).
+  //     (With Safari's "Open safe files after downloading" on, the list
+  //     shows the app itself; the picture keeps to the case the person can't
+  //     guess.)
+  //   1 (row 2) "“USB-C Display.app” Not Opened": the pointer steps off the
+  //     app as the alert comes and waits beside it, clear of its words; Done.
+  //   2 (row 2) Finder is in front again: the pointer clicks Safari's page
+  //     beside it, and Safari comes forward at once (nothing fades, as on the
+  //     Mac), its page in state C. The band pans down to Open Privacy &
+  //     Security; as it is clicked the band pans back up, the pointer riding
+  //     down with the page, and Safari's sheet comes: Allow.
+  //   3 (row 3) Privacy & Security: Open Anyway; the confirmation: Open
+  //     Anyway; the authentication dialog, shown and left for the person.
+  // Two screens: A (Safari, Finder and the alert; s 0.85, panning to the page
+  // column and back) and B (System Settings; s 0.8, as gk-anyway). Between
+  // them the band dips through the desktop, so no window's words ever lie
+  // over another's: Safari's windows fade out, then B fades in; as the loop
+  // restarts, B fades out, then Safari's windows come back.
+  // Times are seconds: the pointer glides 1.15 s, rests 0.8 s on what it
+  // will click (with the highlight), clicks, and what the click did stays at
+  // least a second before the pointer sets off again. storyScene() cuts the
+  // loop to the chapters played (opt.fromChapter onwards) and gives
+  // tl.chapters, and tl.stills: one frame per click, the pointer resting on
+  // what it will click (app.js steps through them when motion is reduced).
+  const SPRING = 'linear(0, .099, .286, .471, .625, .741, .826, .884, .924, .951, .968, .980, .987, .992, .995, .997, 1)';
+  const GLIDE = 1.15, REST = 0.8, OUTRO = 1, DBL = 0.3;
+  const STORY_ROWS = [1, 2, 2, 3];
+  // Finder's window lies within Safari's frame (so Safari, brought forward,
+  // hides it), in the left half of what the camera shows; its two items sit
+  // under the Not Opened alert, so no name shows twice beside it. It reaches
+  // below the band, so nothing of the page behind peeks out under it.
+  const FD_WIN = { x: 446, y: 160, w: 556, h: 300 };
+  // Where the pointer clicks to bring Safari back: its page, right of Finder
+  // (window points).
+  const SAF_BACK = { x: FD_WIN.x + FD_WIN.w + 60 - SAF.x, y: FD_WIN.y + 60 - SAF.y };
+
+  function storyData(o) {
+    const st = { tracks: [], chapters: [], cams: {} };
+    const HID = { opacity: 0, transform: 'scale(.97)' }, SHOWN = { opacity: 1, transform: 'none' }, GONE = { opacity: 0, transform: 'none' };
+    const ON = { opacity: 1 }, OFF = { opacity: 0 };
+    // A value that changes at t over d seconds: [[t, d, value, easing], ...].
+    // kind: 'el', 'cam', 'layer' (a whole screen), 'dip' (Safari's windows,
+    // which leave and come back around the other screen).
+    const track = (sel, layer, v0, changes, kind) => {
+      const kf = [[0, v0]];
+      let cur = v0;
+      changes.slice().sort((a, b) => a[0] - b[0]).forEach(([t, d, v, e]) => { kf.push([t, Object.assign({}, cur, { easing: e || 'ease-in-out' })], [t + d, v]); cur = v; });
+      st.tracks.push({ sel, layer, kind: kind || 'el', kf });
+    };
+    const pop = (t) => [[t, 0, HID, 'linear'], [t, 0.25, SHOWN, SPRING]];
+    const shut = (t, d) => [[t, d || 0.16, GONE, 'ease-in']];
+    // A control looks pressed while the button is down; a double-click ([t1,
+    // t2]) presses it twice.
+    const pressed = (sel, layer, t, accent, f) => {
+      f = f || (o.dark ? (accent ? 'brightness(1.16)' : 'brightness(1.5)') : (accent ? 'brightness(.86)' : 'brightness(.9)'));
+      const ch = [];
+      if (Array.isArray(t)) t.forEach((u) => ch.push([u - 0.03, 0.03, { filter: f }, 'linear'], [u + 0.08, 0.08, { filter: 'brightness(1)' }, 'ease-out']));
+      else ch.push([t - 0.03, 0.03, { filter: f }, 'linear'], [t + 0.16, 0.12, { filter: 'brightness(1)' }, 'ease-out']);
+      track(sel, layer, { filter: 'brightness(1)' }, ch);
+    };
+    const cam = (layer, c0, changes) => {
+      st.cams[layer] = [[0, 0, c0]].concat(changes);
+      track('.ly-' + layer.toLowerCase(), layer, { transform: camT(c0) }, changes.map(([t, d, c]) => [t, d, { transform: camT(c) }, SPRING]), 'cam');
+    };
+    const chapter = (start, intro, end, poster, entry) => {
+      const c = { row: STORY_ROWS[st.chapters.length], start, intro, end, poster, entry, moves: [], rides: [], halo: [], clicks: [] };
+      st.chapters.push(c);
+      return c;
+    };
+    // The pointer glides to sel, arrives REST before t, rests (highlighted),
+    // clicks at t (and again DBL later for a double-click).
+    const click = (c, sel, t, dx, dy, opt) => {
+      opt = opt || {};
+      const arrive = t - REST;
+      c.moves.push([arrive - GLIDE, arrive, sel, dx, dy]);
+      if (!opt.noHalo) c.halo.push([opt.halo || sel, arrive - 0.05, t]);
+      c.clicks.push([t, sel, dx, dy]);
+      if (opt.dbl) c.clicks.push([t + DBL, sel, dx, dy]);
+    };
+
+    // Chapter 0: Downloads, the zip, then the app it makes (Finder).
+    const c0 = chapter(0, 0, 9.95, 5.6, ['.saf-on .dlb', -150, 110]);
+    // The tip rests in the button's lower right, clear of its arrow.
+    click(c0, '.saf-on .dlb', 2.6, 7, 7);
+    pressed('.saf-on .dlb', 'A', 2.6);
+    track('.pv', 'A', HID, pop(2.75).concat(shut(6.6, 0.15)));
+    // The tip rests just right of the zip's name, so the name stays readable.
+    click(c0, '.saf-on .zi', 5.9, 30, 3, { dbl: true });
+    track('.zi .mk-hl', 'A', OFF, [[5.9, 0.03, ON, 'linear'], [6.9, 0, OFF]]);
+    track('.zi b', 'A', { color: 'var(--tx)' }, [[5.9, 0.03, { color: 'var(--ac-tx)' }, 'linear'], [6.9, 0, { color: 'var(--tx)' }]]);
+    track('.zi .sz, .zi .mg', 'A', { color: 'var(--tx2)' }, [[5.9, 0.03, { color: 'var(--ac-tx)' }, 'linear'], [6.9, 0, { color: 'var(--tx2)' }]]);
+    // Finder comes forward; Safari goes inactive behind it, where its page
+    // turns to state C unseen. A window turns active or inactive at once, as
+    // on the Mac: Finder as the alert comes and again once it has gone, Safari
+    // at the click that brings it back (chapter 2). Then Safari's windows dip
+    // out for System Settings (chapter 3).
+    track('.fd-on', 'A', HID, pop(6.6).concat([[10.1, 0, GONE], [13.52, 0, SHOWN], [15.75, 0, GONE]]));
+    track('.fd-off', 'A', OFF, [[6.85, 0, ON], [15.75, 0, OFF]]);
+    track('.saf-on', 'A', ON, [[6.6, 0, OFF], [15.75, 0, ON], [24.2, 0.25, OFF]], 'dip');
+    track('.saf-off', 'A', ON, [[24.2, 0.25, OFF]], 'dip');
+    track('.pgB', 'A', ON, o.notarized ? [] : [[6.85, 0, OFF]]);
+    track('.pgC', 'A', OFF, o.notarized ? [] : [[6.85, 0, ON]]);
+    // The tip rests on the app's icon, clear of its name.
+    click(c0, '.fd-on .fi-app .fic', 9.5, 6, -4, { dbl: true });
+    pressed('.fd-on .fi-app .fic svg', 'A', [9.5, 9.5 + DBL], false, 'brightness(.7)');
+
+    // Chapter 1: the Not Opened alert, Done. Right after the double-click the
+    // pointer steps off the app and waits beside the alert, so nothing covers
+    // its words while they are read (they are the most of the story).
+    const c1 = chapter(9.95, 0, 13.6, 12.5, ['.al-no', 175, 0]);
+    track('.al-no', 'A', HID, pop(10.1).concat(shut(13.35)));
+    c1.moves.push([9.5 + DBL + 0.1, 10.45, '.al-no', 175, 0]);
+    click(c1, '.al-no .t-done', 13.2, 0, 6);
+    pressed('.al-no .t-done', 'A', 13.2);
+
+    // Chapter 2: back to Safari, its page's button, then Safari's sheet.
+    const c2 = chapter(13.6, 0, 24.2, 19.0, ['.saf-on .bk', -150, 60]);
+    // Finder is in front again: a click on Safari's page beside it.
+    click(c2, '.saf-on .bk', 15.75, 0, 0, { noHalo: true });
+    cam('A', CAM_SAF, [[16.45, 0.9, CAM_COL_C], [19.55, 0.9, CAM_SAF]]);
+    // The tip rests in the button's right padding, clear of its words and of
+    // the note under it.
+    click(c2, '.saf-on .pgC .tgt', 19.4, 68, 2);
+    pressed('.saf-on .pgC .tgt', 'A', 19.4, true);
+    // The band pans back up as Safari's sheet comes; the pointer stays on the
+    // button, so it rides down and out with the page, then comes up to Allow.
+    c2.rides.push([19.55, 0.9]);
+    track('.sg-dim', 'A', OFF, [[20.15, 0.22, ON], [23.5, 0.2, OFF]]);
+    track('.sg-al', 'A', HID, pop(20.2).concat(shut(23.5, 0.15)));
+    click(c2, '.saf-on .sg-al .tgt', 23.35, 30, 2);
+    pressed('.saf-on .sg-al .tgt', 'A', 23.35, true);
+
+    // Chapter 3: System Settings: Open Anyway, Open Anyway, then Touch ID or the password.
+    const c3 = chapter(24.2, 0.7, 34.75, 26.9, ['.t1', 120, 86]);
+    track('.ly-a', 'A', ON, [[24.85, 0, OFF]], 'layer');
+    track('.ly-b', 'B', OFF, [[24.45, 0.4, ON]], 'layer');
+    st.cams.B = [[0, 0, CAM_SET]];
+    click(c3, '.t1', 27.25, 0, 6);
+    pressed('.t1', 'B', 27.25);
+    track('.w-on', 'B', ON, [[27.4, 0.15, OFF]]);
+    // The confirmation stays a full second before the pointer sets off: it is
+    // the warning people stop at.
+    track('.dlg-c', 'B', HID, pop(27.4).concat(shut(30.75, 0.15)));
+    // Open Anyway has Done right below it: the tip rests beside its label,
+    // high enough that the arrow stays off Done.
+    click(c3, '.t2', 30.6, 40, -3);
+    pressed('.t2', 'B', 30.6, true);
+    track('.dlg-a', 'B', HID, pop(31.05));
+    track('.dlg-a .fr', 'B', OFF, [[31.3, 0.15, ON]]);
+    // Then the pointer steps aside onto the desktop, clear of the dialog and
+    // the pane: Touch ID or the password is the person's own part.
+    c3.moves.push([31.15, 32.25, '.dlg-a', 318, 10]);
+    return st;
+  }
+
+  function storyScreens(o, withA, withB) {
+    const size = o.appBytes ? macSize(o.appBytes) : esc(o.appSize);
+    let a = '', b = '';
+    if (withA) {
+      const pop = '<div class="mk-pop2 pv" style="' + at(SAF.w - 12 - 330, 58) + '"><div class="hd">Downloads<span>Clear</span></div><div class="it zi"><i class="mk-hl"></i><i class="ic">' + zipIcon() + '</i>' +
+        '<div><b>' + zipName(o) + '</b>' + (size ? '<span class="sz">' + size + '</span>' : '') + '</div><span class="mg">' + GL.mag + '</span></div></div>';
+      const sheet = '<div class="mk-dim sg-dim" style="top:52px"></div>' +
+        alertBox({ x: SAF.w / 2 - 130, y: 64, cls: 'dlg sheet sg-al', icon: '', title: 'Do you want to allow this page to open “System Settings”?', row: true, buttons: [['Cancel', ''], ['Allow', 'def tgt']] });
+      // Where the pointer clicks Safari's page to bring it forward (nothing drawn).
+      const back = '<i class="bk" style="position:absolute;' + at(SAF_BACK.x - 1, SAF_BACK.y - 1, 2, 2) + '"></i>';
+      const pages = (tgt) => page(o, 'B', 'pgB') + page(o, 'C', 'pgC', tgt);
+      // The notarized page's sentence is a line shorter, so its centred column would sit 11 pt
+      // lower and the band's edge would cut its icon: a window 22 pt shorter (its bottom is out of
+      // the picture) keeps the icon where the other one is.
+      const h = o.notarized ? SAF.h - 22 : SAF.h;
+      a = safariWin(o, { addr: addrIdle(o.host), page: pages(false), dl: true, off: true, cls: 'saf-off', h }) +
+        safariWin(o, { addr: addrIdle(o.host), page: pages(true), dl: true, cls: 'saf-on', extra: pop + sheet + back, h }) +
+        finderWin(o, Object.assign({ off: true, cls: 'fd-off' }, FD_WIN)) + finderWin(o, Object.assign({ cls: 'fd-on' }, FD_WIN)) +
+        centred(CAM_SAF, notOpenedBox(o, 'dlg al-no', 't-done'));
+    }
+    if (withB) {
+      // The password dialog sits 15 pt lower, below the toolbar's title and the row under it.
+      b = winSecurity(o, true, 'w-off') + winSecurity(o, false, 'w-on', 't1') + centred(CAM_SET, confirmBox(o)) + centred(CAM_SET, authBox('dlg-a', 't3'), 15);
+    }
+    return { a, b };
+  }
+
+  // The loop of chapters from..to (indexes in STORY_ROWS): its timeline in
+  // fractions, with an outro that brings the start back, and tl.chapters:
+  // [{index, row, start, end, poster}] (the outro belongs to no chapter, so
+  // no row is current while the loop goes back to its start).
+  function storyScene(o, from, to) {
+    const st = storyData(o);
+    const C = st.chapters;
+    from = Math.max(0, Math.min(C.length - 1, from | 0));
+    to = Math.max(from, Math.min(C.length - 1, to | 0));
+    const s0 = C[from].start + (from > 0 ? C[from].intro : 0);
+    const endMain = C[to].end, E = endMain + OUTRO, D = E - s0;
+    const F = (t) => Math.max(0, Math.min(1, (t - s0) / D));
+    const valueAt = (kf, t) => { let v = kf[0][1]; kf.forEach(([u, p]) => { if (u <= t + 1e-6) v = p; }); return v; };
+    const plain = (p) => { const c = Object.assign({}, p); delete c.easing; return c; };
+    const layers = {};
+    st.tracks.forEach((tr) => { if (tr.kind === 'layer') layers[tr.layer] = tr.kf; });
+    const shown = (L, t) => !layers[L] || +valueAt(layers[L], t).opacity > 0.5;
+    const withA = from <= 2, withB = to >= 3;
+    // Both screens play: they meet through the desktop (a dip), both ways.
+    const dip = withA && withB;
+
+    const anim = [];
+    st.tracks.forEach((tr) => {
+      if ((tr.layer === 'A' && !withA) || (tr.layer === 'B' && !withB)) return;
+      const v0 = plain(valueAt(tr.kf, s0)), v1 = plain(valueAt(tr.kf, endMain));
+      const kf = [Object.assign({ offset: 0 }, v0)];
+      tr.kf.forEach(([t, p]) => { if (t > s0 + 1e-6 && t < endMain - 1e-6) kf.push(Object.assign({ offset: F(t) }, p)); });
+      kf.push(Object.assign({ offset: F(endMain) }, v1));
+      if (JSON.stringify(v0) !== JSON.stringify(v1)) {
+        // Back to the start. Screen B leaving fades out over A's bare desktop
+        // (A is there at once beneath it, its windows still out), then Safari's
+        // windows come back; what can't be seen changes at once; on a screen
+        // that stays, dialogs close first and windows come back after.
+        let a, z;
+        if (tr.kind === 'layer') { if (+v0.opacity > +v1.opacity) { a = endMain; z = endMain + 0.02; } else { a = endMain + 0.1; z = endMain + 0.35; } }
+        else if (tr.kind === 'dip' && dip) { a = endMain + 0.35; z = endMain + 0.7; }
+        else if (!shown(tr.layer, endMain)) { a = endMain; z = endMain + 0.01; }
+        else if (!shown(tr.layer, s0)) { a = E - 0.05; z = E - 0.04; }
+        else if (tr.kind === 'cam') { a = endMain + 0.1; z = endMain + 0.9; }
+        else if (v0.opacity != null && +v0.opacity > +v1.opacity) { a = endMain + 0.3; z = endMain + 0.55; }
+        else { a = endMain; z = endMain + 0.25; }
+        kf.push(Object.assign({ offset: F(a) }, v1, { easing: 'ease-in-out' }), Object.assign({ offset: F(z) }, v0));
+      }
+      anim.push([tr.sel, kf]);
+    });
+
+    // The pointer: each target is measured where it was when the pointer got
+    // there (the 6th field), so a hold doesn't jump when the camera moves on.
+    // A ride keeps it on what it just clicked while the camera moves: it is
+    // measured before and after, and moves with the camera's own easing.
+    const cursor = [], halo = [], clicks = [], stills = [];
+    let last = null;
+    for (let k = from; k <= to; k++) {
+      const c = C[k];
+      if (k === from) { last = [c.entry[0], c.entry[1], c.entry[2], 0]; cursor.push([0, last[0], last[1], last[2], 'linear', 0]); }
+      const steps = c.moves.map((m) => ({ t: m[0], m })).concat(c.rides.map((r) => ({ t: r[0], r }))).sort((x, y) => x.t - y.t);
+      steps.forEach(({ m, r }) => {
+        if (m) {
+          let [g0, g1] = m;
+          const [, , sel, dx, dy] = m;
+          if (g0 < s0 + 0.3) { g1 += s0 + 0.3 - g0; g0 = s0 + 0.3; }
+          cursor.push([F(g0), last[0], last[1], last[2], EASE, last[3]], [F(g1), sel, dx, dy, 'linear', F(g1)]);
+          last = [sel, dx, dy, F(g1)];
+        } else {
+          const [r0, rd] = r;
+          cursor.push([F(r0), last[0], last[1], last[2], SPRING, F(r0 - 0.02)], [F(r0 + rd), last[0], last[1], last[2], 'linear', F(r0 + rd)]);
+          last = [last[0], last[1], last[2], F(r0 + rd)];
+        }
+      });
+      c.halo.forEach(([sel, a, z]) => halo.push([sel, F(a), F(z)]));
+      c.clicks.forEach(([t, sel, dx, dy]) => {
+        clicks.push([F(t), sel, dx, dy]);
+        // One still per click (the second of a double-click is the same one).
+        if (!stills.length || t - stills[stills.length - 1][0] > 0.5) stills.push([t, F(t - 0.12)]);
+      });
+    }
+    cursor.push([F(endMain), last[0], last[1], last[2], 'linear', last[3]]);
+    // The last still of the whole story: the authentication dialog, left for the person.
+    if (to === C.length - 1) stills.push([endMain, F(endMain - 0.6)]);
+    const chapters = [];
+    for (let k = from; k <= to; k++) chapters.push({ index: k, row: C[k].row, start: k === from ? 0 : F(C[k].start), end: F(C[k].end), poster: F(C[k].poster) });
+    const camOf = (L, t) => { let c = st.cams[L][0][2]; st.cams[L].forEach(([u, , cc]) => { if (u <= t + 1e-6) c = cc; }); return c; };
+    const tl = {
+      dur: Math.round(D * 1000), real: true, anim, cursor, halo, clicks,
+      cursorVis: [[F(s0 + 0.2), F(endMain)]],
+      chapters,
+      stills: stills.map((x) => x[1]),
+      camAt: (scr, f) => camOf(scr.classList.contains('ly-b') ? 'B' : 'A', s0 + f * D),
+    };
+    const scr = storyScreens(o, withA, withB);
+    const screens = [];
+    if (withA) screens.push({ cls: 'ly-a', cam: camOf('A', s0), layers: scr.a });
+    if (withB) screens.push({ cls: 'ly-b', cam: CAM_SET, layers: scr.b });
+    return { cam: shown('B', s0) && withB ? CAM_SET : camOf('A', s0), screens, tl, poster: chapters[0].poster, family: 'story:' + from + '-' + to, range: [from, to] };
+  }
+  def('gk-story', 'story', (o) => storyScene(o, o.fromChapter, STORY_ROWS.length - 1));
+  // The Downloads list on its own (the notarized build): chapter 0, looping.
+  def('safari-open', 'story', (o) => storyScene(o, 0, 0));
 
   // Privacy lists: the pointer turns on the app's switch. off: the switch
   // stays off and there's no pointer.
@@ -603,6 +928,11 @@
       notarized: !!opt.notarized,
       still: !!opt.still,
       off: !!opt.off,
+      // gk-story: the first chapter to play (0-based, see STORY_ROWS), or the
+      // first chapter of row fromRow.
+      fromChapter: Number.isInteger(+opt.fromChapter) && opt.fromChapter !== '' && opt.fromChapter != null
+        ? Math.max(0, Math.min(STORY_ROWS.length - 1, +opt.fromChapter))
+        : (+opt.fromRow > 1 ? Math.max(0, STORY_ROWS.indexOf(Math.min(3, +opt.fromRow | 0))) : 0),
     };
   }
   const r1 = (v) => Math.round(v * 10) / 10;
@@ -612,6 +942,8 @@
     const known = !!V[name];
     // An unknown name shows the empty desktop, never a wrong instruction.
     const v = known ? V[name](o) : { cam: CAM_SAF, layers: '', tl: { dur: 1000 }, poster: 0 };
+    // Most pictures are one screen; a story has several, each with its camera.
+    const screens = v.screens || [{ cls: '', cam: v.cam, layers: v.layers }];
     const cam = { x: r1(v.cam.x), y: r1(v.cam.y), s: v.cam.s };
     const frozen = o.still || o.off || !known;
     let tl = Object.assign({}, v.tl);
@@ -626,12 +958,16 @@
     tl.w = CANVAS.w; tl.h = CANVAS.h; tl.poster = poster; tl.cam = cam;
     const cls = 'mk ' + (o.dark ? 'dark' : 'light') + ' acc-' + o.accent + ' fam-' + (FAMILY[name] || 'none') + (frozen ? ' still' : '') + (o.off ? ' off-state' : '');
     const html = '<div class="' + cls + '" data-mac="' + esc(name) + '">' +
-      '<div class="mk-scr" style="width:' + SCREEN.w + 'px;height:' + SCREEN.h + 'px;transform:' + camT(cam) + '"><div class="mk-wall"></div>' + v.layers + '</div>' +
+      screens.map((sc) => '<div class="mk-scr' + (sc.cls ? ' ' + sc.cls : '') + '" style="width:' + SCREEN.w + 'px;height:' + SCREEN.h + 'px;transform:' + camT(sc.cam) + '"><div class="mk-wall"></div>' + sc.layers + '</div>').join('') +
       (frozen || !tl.cursor ? '' : pointer(cam.s * 1.15)) + '</div>';
     const key = 'mac:' + name + ':' + (o.dark ? 'd' : 'l') + ':' + o.accent + ':' + o.host + ':' + o.appName + ':' + o.appSize + ':' + o.appBytes + ':' + o.appVersion +
-      ':' + (o.notarized ? 'n' : '') + (o.still ? 's' : '') + (o.off ? 'o' : '');
-    return { key, html, tl, poster, cam, family: FAMILY[name] || 'none', w: CANVAS.w, h: CANVAS.h };
+      ':' + (o.notarized ? 'n' : '') + (o.still ? 's' : '') + (o.off ? 'o' : '') + (v.range ? ':' + v.range.join('-') : '');
+    // A story's family names the chapters it plays: another range is another
+    // picture (a crossfade), never a pan of the band over the story's own camera.
+    return { key, html, tl, poster, cam, family: v.family || FAMILY[name] || 'none', w: CANVAS.w, h: CANVAS.h };
   };
+  // The story's chapters and the row of the steps each one teaches.
+  D.scenes.mac.story = { rows: STORY_ROWS.slice() };
   // For the preview pages: every scene and its family.
   D.scenes.mac.names = Object.keys(V);
   D.scenes.mac.families = Object.assign({}, FAMILY);

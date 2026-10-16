@@ -33,8 +33,7 @@
     ['unreachable', 'waiting'], ['unreachable', 'help'],
     ['get-app', 'address'], ['get-app', 'address-hint'], ['get-app', 'address-ip'], ['get-app', 'download'],
     ['get-app', 'download-hint'], ['get-app', 'allow-downloads'], ['get-app', 'downloading'],
-    ['open-app', 'downloads'], ['open-app', 'confirm'], ['open-app', 'not-opened'], ['open-app', 'page-button'],
-    ['open-app', 'safari-allow'], ['open-app', 'open-anyway'], ['open-app', 'setting-up'], ['open-app', 'setting-up-late'],
+    ['open-app', 'steps'], ['open-app', 'downloads'], ['open-app', 'confirm'], ['open-app', 'setting-up'], ['open-app', 'setting-up-late'],
     ['move', 'idle'], ['move', 'moving'], ['move', 'failed'],
     ['login', 'settings'], ['login', 'asking'],
     ['allow-screen', 'prompt'], ['allow-screen', 'settings'], ['allow-screen', 'reopen'], ['allow-screen', 'reopen-late'], ['allow-screen', 'off'],
@@ -68,8 +67,13 @@
     mark('dlWait', sv.pageVisited && d.sent === 0 && L.screen === 'get-app');
     mark('clicked', sv.downloadClicked && d.sent === 0);
     mark('bytes', d.sent > 0 && !d.done);
-    mark('settingsClick', sv.settingsOpened && !sv.leftForSettings);
     mark('opened', sv.appOpened);
+    // Opening the un-notarized app (open-app steps): rows 1-2 are done once the page has reported
+    // Open Privacy & Security. Latched: whatever Safari's focus and blur say afterwards (a focus
+    // clears settingsOpened on the host), no row goes back. Only Download Again (the page's
+    // 'download', a new download) starts the list over.
+    if (sv.downloadClicked) L.stepsDone = 0;
+    else if (sv.settingsOpened || sv.leftForSettings) L.stepsDone = Math.max(+L.stepsDone || 0, 2);
     mark('needsRelaunch', ms.screenNeedsRelaunch);
     mark('login', ms.loginItemNeedsApproval && !ms.settingsFront);
     if ((L.screen === 'allow-screen' || L.screen === 'allow-control') && (ms.promptUp || ms.settingsFront || ms.authUp)) {
@@ -180,14 +184,14 @@
     return L.screen === 'get-app' && L.sub === 'allow-downloads' ? 'allow-downloads' : 'download';
   }
 
-  function openSub(S, L) {                                  // follows the page in Safari
+  // Un-notarized, one screen ('steps') from the download until the Mac app answers: Safari's focus
+  // and blur are too noisy to follow (a blur under 0.8 s after Open Privacy & Security, a focus
+  // that clears it). What the page has reported shows only in its rows (L.stepsDone, observe).
+  function openSub(S, L) {
     const sv = S.server, since = sinceOf(L);
     if (sv.appOpened) return since('opened') >= 40 ? 'setting-up-late' : 'setting-up';  // only with the Mac ping (§7.3 M6)
     if (sv.appNotarized) return sv.pageBlurs > 0 && !sv.pageFocused ? 'confirm' : 'downloads';
-    if (sv.leftForSettings) return 'open-anyway';
-    if (sv.settingsOpened) return since('settingsClick') >= 10 ? 'page-button' : 'safari-allow';
-    if (sv.pageBlurs > 0) return sv.pageFocused ? 'page-button' : 'not-opened';
-    return 'downloads';
+    return 'steps';
   }
 
   function permSub(S, L, kind) {                            // kind: 'screen' | 'accessibility'
@@ -257,6 +261,11 @@
   const inputOn = (S) => !!(S.mac.status.axOk && S.setup.axChoice !== 'no');
   const EDGE = { right: 'right', left: 'left', above: 'top', below: 'bottom', top: 'top', bottom: 'bottom' };
   const isUpdate = (S) => S.mac.reachable && (S.mac.outdated || +S.mac.appVersion < 4);
+
+  // The open-app story ('gk-story'): its chapters, as tl.chapters lists them, teach rows 1, 2, 2, 3.
+  // The first chapter (0-based) of each row, for opt.fromChapter once the rows before it are done.
+  const STEP_ROWS = 3;
+  const STORY_FIRST_CHAPTER = { 1: 0, 2: 1, 3: 3 };
 
   // A picture of the Mac's screen (WP2, macos.js): the Mac's own look as soon as it is known.
   function scene(S, L, name, more) {
@@ -376,13 +385,25 @@
       v.variant = 'picture';
       v.title = T('open-app.title');
       v.status = sub === 'setting-up' ? busy('status.settingUpApp') : busy('status.waitingMac');
-      const name = { downloads: 'safari-open', confirm: 'gk-open', 'not-opened': 'gk-notopened', 'page-button': 'safari-settings', 'safari-allow': 'safari-allow', 'open-anyway': 'gk-anyway', 'setting-up': 'bg-items', 'setting-up-late': 'bg-items' }[sub] || 'safari-open';
+      if (sub === 'steps') {
+        // One story under the title: the picture plays the chapters of the rows not yet done
+        // (tl.chapters, macos.js), and the rows never change their words (§3.8).
+        const done = Math.max(0, Math.min(STEP_ROWS, Math.round(+L.stepsDone || 0)));
+        const from = done ? STORY_FIRST_CHAPTER[done + 1] : undefined;
+        v.scene = scene(S, L, 'gk-story', from != null ? { fromChapter: from } : null);
+        if (from != null) v.scene.fromRow = done + 1;          // app.js checks the chapters the scene plays
+        const rows = [];
+        for (let i = 1; i <= STEP_ROWS; i++) rows.push(T('open-app.steps.' + i));
+        v.content = [{ type: 'steps', rows, done }];
+        v.contentTop = 384.5;                                  // fixed: 6 pt under the title
+        // No room for a caption under the rows: why the Mac asks, Open Anyway gone missing, and Move
+        // to Trash are behind the help button (?) in the tray's empty right corner.
+        v.help = 'gatekeeper';
+        return;
+      }
+      const name = { downloads: 'safari-open', confirm: 'gk-open', 'setting-up': 'bg-items', 'setting-up-late': 'bg-items' }[sub] || 'safari-open';
       v.scene = scene(S, L, name, sub === 'setting-up-late' ? { still: true } : null);
       v.body = [P(T('open-app.' + sub + '.body'))];
-      if (sub === 'downloads' && !S.server.appNotarized) v.content = [caption('open-app.downloads.caption')];
-      if (sub === 'not-opened') v.content = [caption('open-app.not-opened.caption', null, 'gatekeeper')];
-      if (sub === 'page-button') v.content = [caption('open-app.page-button.caption', null, 'gatekeeper')];
-      if (sub === 'open-anyway') v.content = [caption('open-app.open-anyway.caption', null, 'open-anyway')];
       if (sub === 'setting-up') v.content = [caption('open-app.setting-up.caption')];
       if (sub === 'setting-up-late') v.content = [link('mac-respond')];
     },
@@ -477,12 +498,12 @@
     const scr = L.screen, sub = L.sub;
     const v = {
       screen: scr, sub, variant: 'glyph', glyph: '', scene: null, title: '', body: [], bodyKey: '',
-      content: [], contentTop: 0, status: null, primary: null, secondary: null, third: null, closeEnabled: true,
+      content: [], contentTop: 0, status: null, primary: null, secondary: null, third: null, help: '', closeEnabled: true,
     };
     if (VIEWS[scr]) VIEWS[scr](v, S, L, sub);
     // Handing off to the installed copy, and that copy's held frame: no buttons (a click would act
     // on a copy that is about to close); they fade in when the hold is released.
-    if (S.setup.handingOff || S.setup.hold) v.primary = v.secondary = v.third = null;
+    if (S.setup.handingOff || S.setup.hold) { v.primary = v.secondary = v.third = null; v.help = ''; }
     if (S.laptop.installing || S.setup.handingOff || S.setup.hold || (scr === 'allow-pc' && sub === 'working')) v.closeEnabled = false;
     // The busy statuses whose work is done in this state (§4.5): only one of these, when it is
     // replaced, shows its check with the done text first; any other replacement just crossfades.
