@@ -565,6 +565,7 @@
     installSecs: 2, yesAfter: 2, refuse: 0, fail: 0, failKeepsFirewall: false, workSecs: 2, holdSecs: 0.5,
     continueAt: 2, plugAt: 3, findAt: 2, typeAt: 4, downloadAt: 3, allowDownloadsAt: null, bytesSecs: 0.6,
     openAt: 3, confirmAt: 3, doneAt: 4, pageButtonAt: 3, allowAt: 2.5, anywayAt: 8,
+    focusAfterDone: false,  // Safari gets the focus back when the Not Opened alert closes (it often doesn't)
     promptClickAt: 3, closePrompt: 0, grantAt: 3, authSecs: 2, authHidesSettings: false, ignoreSettings: 0,
     relaunchSecs: 2.5, ignoreRelaunch: 0, moveSecs: 3,
     keyboardAt: 2.5, axChoice: 'yes', showAfter: 3, display: [], pointerAt: 3, finishAt: 3, inactive: false,
@@ -814,10 +815,17 @@
       () => o.openAt, () => set((s) => { s.server.pageFocused = false; s.server.pageBlurs = 1; }, sv().appNotarized ? 'person: opens the app; macOS asks to confirm' : 'person: opens the app; macOS says “Not Opened”'));
     rule('confirm', () => sv().appNotarized && sv().pageBlurs > 0 && !sv().pageFocused && needApp(), () => o.confirmAt,
       () => { log('person: Open'); later(1.5, () => set((s) => W.appUp(s, look, '5'), 'mac: the app answers (moved, login agent on)')); });
+    // Done in the Not Opened alert. On a real Mac, Safari often doesn't get the focus back (or the
+    // app was opened from Finder): the page then sends nothing, and the person goes on to the
+    // page's Open Privacy & Security button, which the page already shows.
     rule('gk-done', () => !sv().appNotarized && sv().download.done && sv().pageBlurs > 0 && !sv().pageFocused && !sv().settingsOpened && needApp(),
-      () => o.doneAt, () => set((s) => { s.server.pageFocused = true; }, 'person: Done (Safari comes back)'));
-    rule('page-button', () => !sv().appNotarized && sv().download.done && sv().pageBlurs > 0 && sv().pageFocused && !sv().settingsOpened && needApp(),
-      () => o.pageButtonAt, () => set((s) => { s.server.settingsOpened = true; }, 'person: Open Privacy & Security (Safari asks)'));
+      () => o.doneAt, () => {
+        if (o.focusAfterDone) set((s) => { s.server.pageFocused = true; }, 'person: Done (Safari comes back)');
+        else { world.gkDone = true; log('person: Done (Safari stays in the background; the page sends nothing)'); }
+      });
+    // Clicking the page's button brings Safari forward (focus), then the click (settings).
+    rule('page-button', () => !sv().appNotarized && sv().download.done && sv().pageBlurs > 0 && (sv().pageFocused || world.gkDone) && !sv().settingsOpened && needApp(),
+      () => o.pageButtonAt, () => set((s) => { s.server.pageFocused = true; s.server.settingsOpened = true; }, 'person: Open Privacy & Security on the page (Safari comes forward and asks)'));
     rule('safari-allow', () => sv().settingsOpened && !sv().leftForSettings && sv().pageFocused && needApp(), () => o.allowAt,
       () => set((s) => { s.server.pageFocused = false; s.server.pageBlurs++; s.server.leftForSettings = true; }, 'person: Allow (System Settings in front)'));
     // Privacy & Security stays in front: the app moves itself and its agent starts from launchd,
@@ -852,7 +860,7 @@
       const sent = Math.round((APP_SIZE * i) / steps);
       set((s) => {
         s.server.download = { sent, size: APP_SIZE, done: sent >= APP_SIZE };
-        if (sent >= APP_SIZE) { s.server.downloadClicked = false; s.server.pageBlurs = 0; s.server.pageFocused = true; }
+        if (sent >= APP_SIZE) { s.server.downloadClicked = false; s.server.pageBlurs = 0; s.server.pageFocused = true; world.gkDone = false; }
       });
     }
     log('host: download done');
@@ -947,10 +955,13 @@
     'allow-downloads': { init: stage('get-app', 'download'), o: { allowDownloadsAt: 3, bytesSecs: 4, openAt: null }, end: 'open-app/downloads' },
     'move-to-trash': { init: stage('open-app', 'downloads'), o: { pageButtonAt: null, doneAt: 3 },
       script: async () => {
-        await until((s) => s.server.pageBlurs > 0 && s.server.pageFocused);
-        log('person: clicked Move to Trash earlier'); o.openAt = null;
+        await until((s) => s.server.pageBlurs > 0 && (s.server.pageFocused || world.gkDone));
+        log('person: clicked Move to Trash, not Done'); o.openAt = null;
+        await sleep(2);
+        set((s) => { s.server.pageFocused = true; }, 'person: back in Safari');
         await sleep(4); await download();
       }, end: 'open-app/downloads' },
+    'done-focus': { init: stage('open-app', 'downloads'), o: { focusAfterDone: true, pageButtonAt: 5 }, end: 'allow-screen' },
     'back-to-safari': { init: stage('open-app', 'open-anyway'), o: { anywayAt: null, pageButtonAt: null },
       script: async () => {
         await sleep(4);

@@ -144,16 +144,16 @@
     for (var i = 0; i < els.length; i++) els[i].hidden = !els[i].classList.contains(s);
   }
 
-  // State c (un-notarized only) follows the page's focus: after the Download click, Safari loses
-  // the focus to the Mac's "Not Opened" alert and gets it back when the alert closes. A blur in
-  // the first 1.5 s after the click (Safari's own allow-downloads question) doesn't count.
+  // State c (un-notarized only): after the Download click, the first time Safari loses the focus
+  // (the Mac's "Not Opened" alert takes it), the page already offers Open Privacy & Security, so the
+  // button is there when the alert closes, whether or not Safari gets the focus back. A blur in the
+  // first 1.5 s after the click (Safari's own allow-downloads question) doesn't count.
   // Fallback: 20 s after the click.
-  var clickedAt = 0, blurredAt = 0, timer = 0;
+  var clickedAt = 0, timer = 0;
   function downloaded() {
     report('download');
     show('b');
     clickedAt = Date.now();
-    blurredAt = 0;
     clearTimeout(timer);
     if (!notarized) timer = setTimeout(function () { if (state === 'b') show('c'); }, 20000);
   }
@@ -167,11 +167,10 @@
   }
   window.addEventListener('blur', function () {
     report('blur');
-    if (state === 'b' && Date.now() - clickedAt >= 1500) blurredAt = Date.now();
+    if (state === 'b' && !notarized && Date.now() - clickedAt >= 1500) toC();
   });
   window.addEventListener('focus', function () {
     report('focus');
-    if (state === 'b' && !notarized && blurredAt) toC();
     look(false);
   });
 
@@ -238,6 +237,8 @@
   var forced = /[?&]state=([abcd])\b/.exec(location.search);
   show(forced ? forced[1] : hasApp ? 'a' : 'd');
   look(true);
+  // Opened with Safari already in front, the page gets no focus event: say where it is now.
+  report(document.hasFocus() ? 'focus' : 'blur');
 })();
 </script>
 </body>

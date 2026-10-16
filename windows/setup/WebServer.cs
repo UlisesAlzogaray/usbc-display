@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -192,7 +193,7 @@ sealed class WebServer
             Send(s, 405, "Method Not Allowed", "text/plain; charset=utf-8", Encoding.UTF8.GetBytes("Not allowed\n"), false, "Allow: GET, HEAD\r\n");
             return false;
         }
-        wizard.OnWebRequest(path);
+        if (path != "/event") wizard.OnWebRequest(path);  // events are logged by name below
 
         switch (path)
         {
@@ -213,6 +214,8 @@ sealed class WebServer
                 // app may say it was opened, so this PC can show the matching step.
                 // e=<word> plus &k=v pairs; anything unknown is ignored.
                 var args = ParseQuery(query);
+                // "web: event blur", "web: event look dark=1 accent=purple": what Safari reported, in order.
+                Log.Write("web: event " + string.Join(" ", args.Select(kv => kv.Key == "e" ? kv.Value : kv.Key + "=" + kv.Value)));
                 if (!head_ && args.TryGetValue("e", out string e) && e is "focus" or "blur" or "settings" or "download" or "look" or "opened")
                     wizard.OnPageEvent(e, args);
                 Send(s, 204, "No Content", "text/plain; charset=utf-8", Array.Empty<byte>(), head_, null, keepAlive);

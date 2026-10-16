@@ -371,7 +371,10 @@ sealed class Wizard
             switch (e)
             {
                 case "blur":
-                    if (sv.PageFocused) Set(ref sv.PageBlurs, sv.PageBlurs + 1);
+                    // A blur after a focus is a new one. The first blur after the download counts
+                    // even if the page never reported a focus (a page opened with Safari already in
+                    // front gets no focus event): it is the Mac's alert taking the focus.
+                    if (sv.PageFocused || (sv.Download.Done && sv.PageBlurs == 0)) Set(ref sv.PageBlurs, sv.PageBlurs + 1);
                     Set(ref sv.PageFocused, false);
                     // Safari lost the focus a moment after Open Privacy & Security: System Settings
                     // is in front now (Safari's own question about it keeps the focus).
