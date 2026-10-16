@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light" data-accent="blue">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -10,32 +10,24 @@
 <link rel="stylesheet" href="macos.css">
 </head>
 <body>
-<div id="app">
-  <!-- A Mac window, on Windows too: macOS's buttons top left, its title bar, corners and edge.
-       The Mac's copy of this window (the handover) is the same page, so nothing changes at the cut. -->
+<!-- One Mac window (OnBoardingKit style), on Windows too: 800 x 600 pt, 16 pt continuous corners, a
+     transparent 32 pt title band with the traffic lights and no title. The Mac's copy of this window
+     (the handover) is the same page, drawn from the mirrored state, so nothing changes at the cut. -->
+<div id="app" class="win">
   <div class="lights" id="lights">
-    <button class="tl close" data-act="close" aria-label="Close. You can finish setup later."><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M4.6 4.6l4.8 4.8M9.4 4.6l-4.8 4.8"/></svg></button>
-    <button class="tl min" data-act="minimize" aria-label="Minimize"><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M3.9 7h6.2"/></svg></button>
+    <button class="tl close" data-act="close" aria-label="Close" tabindex="-1"><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M4.6 4.6l4.8 4.8M9.4 4.6l-4.8 4.8"/></svg></button>
+    <button class="tl min" data-act="minimize" aria-label="Minimize" tabindex="-1"><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M3.9 7h6.2"/></svg></button>
     <button class="tl zoom" disabled aria-hidden="true" tabindex="-1"><svg viewBox="0 0 14 14" aria-hidden="true"><path class="fill" d="M4.2 9.8V5.6l4.2 4.2zM9.8 4.2v4.2L5.6 4.2z"/></svg></button>
   </div>
-  <header class="titlebar"><div class="win-title">USB-C Display Setup</div></header>
-  <div class="drag-strip" aria-hidden="true"></div>
-  <nav class="rail" id="rail" aria-label="Setup steps"></nav>
-  <main class="main">
-    <div class="content" id="content">
-      <div class="head" id="r-head"></div>
-      <div class="col">
-        <div class="top" id="r-top" hidden></div>
-        <div class="stage" id="stage" aria-hidden="true"><div class="scene-wrap"><div class="scene" id="scene"></div></div></div>
-        <div id="r-sub" hidden></div>
-        <div class="below" id="r-below" hidden></div>
-      </div>
-      <aside class="aside" id="r-aside" hidden></aside>
-    </div>
-    <div class="footer" id="r-footer"></div>
-  </main>
+  <main class="page" id="page"></main>
+  <footer class="tray" id="tray">
+    <div class="slot-left" id="slot"><div class="status" id="status" role="status" aria-live="polite"></div></div>
+    <div class="buttons" id="buttons"></div>
+  </footer>
+  <div class="sheet-dim" id="sheet-dim" hidden></div><div class="sheet" id="sheet" role="dialog" aria-modal="true" hidden></div>
   <svg class="win-edge" id="win-edge" aria-hidden="true"><path class="hi"/><path class="out"/></svg>
 </div>
+<script src="strings.js"></script>
 <script src="scenes.js"></script>
 <script src="macos.js"></script>
 <script src="steps.js"></script>

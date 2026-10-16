@@ -1,34 +1,44 @@
-// Replicas of the Mac's own screens for the steps that happen on the Mac.
-// D.scenes.mac(name, opt) returns a scene like the ones in scenes.js
-// ({ key, html, tl, poster, crop }), played by the same D.playScene.
+// Pictures of the Mac's own screens for the picture band (SPEC §3.0.3, §6.3).
 //
-// Each scene is a crop of a whole Mac screen (1512 x 982 pt, a 14-inch
-// MacBook Pro). Windows and dialogs are built at their real size in points,
-// measured from captures of macOS 27, and the screen is scaled down into the
-// 400 x 250 canvas. Text, icons and artwork are drawn here: nothing is copied
-// from Apple. The pointer and the ring around the target come from the
-// timeline engine, so posters and reduced motion work as for every scene.
+// D.scenes.mac(name, opt) returns
+//   { key, html, tl, poster, cam: {x, y, s}, family, w: 800, h: 300 }
+// html is an 800 x 300 canvas (.mk). Inside it, .mk-scr is a whole Mac screen
+// (1512 x 982 pt, a 14-inch MacBook Pro) laid out in points: wallpaper,
+// windows and dialogs at their real size, measured from macOS 27 captures.
+// The camera (D.scenes.camTransform(cam)) shows 800/s x 300/s points of it,
+// from (x, y). Scenes of one family share one screen layout, so the wizard can
+// pan between their cameras. The pointer is our own drawn arrow, played by
+// D.playScene with tl (tl.w = 800). Text, icons and artwork are our drawings;
+// the words quote macOS, because that is what the person sees on the Mac.
+//
+// opt = { dark, accent, host, appName, appSize, appBytes, appVersion,
+//         notarized, frame: 'band', still, off }
+//   appSize: the page's own size text ("0.7 MB"); appBytes: the size in bytes,
+//   which Safari's Downloads list writes the Mac's way ("660 KB").
+//   still: frozen at poster, no pointer.  off: list scenes show the switch
+//   off, with no pointer.  Use key (not html) to tell scenes apart.
 (function () {
   'use strict';
   const D = (window.USBC = window.USBC || {});
+  D.scenes = D.scenes || {};
 
   const SCREEN = { w: 1512, h: 982 };
-  const ACCENTS = ['purple', 'blue', 'pink', 'red', 'orange', 'yellow', 'green', 'graphite', 'multicolor'];
+  const CANVAS = { w: 800, h: 300 };
+  const ACCENTS = ['purple', 'blue', 'pink', 'red', 'orange', 'yellow', 'green', 'graphite'];
   const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const q = (t) => '“' + t + '”';
   let uid = 0;
   const nid = (p) => 'mk' + p + (++uid);
   const px = (v) => Math.round(v * 100) / 100 + 'px';
   const at = (x, y, w, h) => 'left:' + px(x) + ';top:' + px(y) + (w != null ? ';width:' + px(w) : '') + (h != null ? ';height:' + px(h) : '');
+  const camT = (cam) => (D.scenes.camTransform ? D.scenes.camTransform(cam) : 'scale(' + cam.s + ') translate(' + -cam.x + 'px,' + -cam.y + 'px)');
 
-  // ---------- Icons ----------
+  // ---------- Icons (our drawings) ----------
 
-  // The app's own icon: the same drawing as mac/make-icon.m (a laptop in
-  // front of a display), so it matches what the Mac shows for the app.
+  // The app's own icon, the same drawing as mac/make-icon.m.
   function appIcon(cls, full) {
     const g = nid('g'), g2 = nid('g'), s1 = nid('s'), s2 = nid('s'), f = nid('f');
     const grad = (id, y1, y2, a, b) => '<linearGradient id="' + id + '" gradientUnits="userSpaceOnUse" x1="0" y1="' + y1 + '" x2="0" y2="' + y2 + '"><stop offset="0" stop-color="' + a + '"/><stop offset="1" stop-color="' + b + '"/></linearGradient>';
-    // full: lists show the icon edge to edge, without the transparent margin.
     return '<svg viewBox="' + (full ? '98 98 828 828' : '0 0 1024 1024') + '"' + (cls ? ' class="' + cls + '"' : '') + ' aria-hidden="true"><defs>' +
       grad(g, 100, 924, '#54a3ff', '#1a5ee0') + grad(g2, 76, 900, '#54a3ff', '#1a5ee0') + grad(s1, 278, 540, '#dbedff', '#9ec7ff') + grad(s2, 470, 662, '#dbedff', '#9ec7ff') +
       '<filter id="' + f + '" x="-10%" y="-10%" width="120%" height="125%"><feDropShadow dx="0" dy="12" stdDeviation="14" flood-opacity=".28"/></filter></defs>' +
@@ -40,7 +50,7 @@
       '<rect x="168" y="680" width="448" height="46" rx="20"/><rect x="346" y="680" width="92" height="14" rx="7" fill="#ccdefa"/></g></svg>';
   }
 
-  // Gatekeeper's icon: a vault door with a warning sign (drawn, 64 pt grid).
+  // A vault door with a warning sign (Gatekeeper's alerts).
   function vaultIcon() {
     const b = nid('b'), k = nid('k'), w = nid('w');
     return '<svg viewBox="0 0 64 64" aria-hidden="true"><defs>' +
@@ -79,7 +89,7 @@
       '</svg>';
   }
 
-  // System Settings' own icon: a grey gear.
+  // A grey gear (System Settings and its notifications).
   function settingsIcon() {
     const b = nid('b'), r = nid('r');
     return '<svg viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="' + b + '" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#9a9aa0"/><stop offset="1" stop-color="#5f5f66"/></linearGradient>' +
@@ -91,23 +101,9 @@
       '<g stroke="url(#' + r + ')" stroke-width="2.4" stroke-linecap="round"><path d="M32 23.5v17M24.6 27.8l14.8 8.4M24.6 36.2l14.8-8.4"/></g><circle cx="32" cy="32" r="3.2" fill="#d8d9dd"/></svg>';
   }
 
-  // Safari's compass (drawn).
-  function safariIcon() {
-    const b = nid('b'), c = nid('c');
-    return '<svg viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="' + b + '" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#e3e4e8"/></linearGradient>' +
-      '<linearGradient id="' + c + '" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4fc3ff"/><stop offset="1" stop-color="#1b62e8"/></linearGradient></defs>' +
-      '<rect x="6.3" y="6.3" width="51.4" height="51.4" rx="12" fill="url(#' + b + ')"/>' +
-      '<circle cx="32" cy="32" r="21" fill="url(#' + c + ')"/><circle cx="32" cy="32" r="18.2" fill="none" stroke="#fff" stroke-opacity=".75" stroke-width="2.2" stroke-dasharray=".5 2.35"/>' +
-      '<path d="M43.5 20.5L35 35 20.5 43.5 29 29z" fill="#fff"/><path d="M43.5 20.5L29 29l6 6z" fill="#ff3b30"/></svg>';
-  }
-
   // Small app icons for the lists (20 pt). Generic drawings.
   const SQ = (fill, inner, stroke) => '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x=".5" y=".5" width="19" height="19" rx="4.6" fill="' + fill + '"' + (stroke ? ' stroke="' + stroke + '" stroke-width=".5"' : '') + '/>' + inner + '</svg>';
   const ICON = {
-    quicktime: () => SQ('#48484c', '<circle cx="10" cy="10" r="6.6" fill="#1c1c1e"/><circle cx="10" cy="10" r="5.6" fill="none" stroke="#dcdce0" stroke-width="1.9"/><path d="M13.3 13.4l2.7 2.7" stroke="#dcdce0" stroke-width="2.2" stroke-linecap="round"/><path d="M8.7 7.6v4.8l3.9-2.4z" fill="#dcdce0"/>', 'rgba(255,255,255,.12)'),
-    screenshot: () => SQ('#e9e9ec', '<rect x="3.4" y="4.6" width="13.2" height="9.6" rx="1.6" fill="none" stroke="#8a8a90" stroke-width="1" stroke-dasharray="1.6 1.1"/><path d="M7.6 8.2h1.1l.6-.9h1.4l.6.9h1.1v3.6H7.6z" fill="#5d5d63"/><circle cx="10" cy="10" r="1.1" fill="#e9e9ec"/>', 'rgba(0,0,0,.18)'),
-    shortcuts: (id = nid('h')) => '<svg viewBox="0 0 20 20" aria-hidden="true"><defs><linearGradient id="' + id + '" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3a7bfd"/><stop offset="1" stop-color="#d03ae4"/></linearGradient></defs><rect x=".5" y=".5" width="19" height="19" rx="4.6" fill="url(#' + id + ')"/><rect x="4" y="4.2" width="9" height="9" rx="2.6" transform="rotate(45 8.5 8.7)" fill="#fff" fill-opacity=".55"/><rect x="7" y="7.2" width="9" height="9" rx="2.6" transform="rotate(45 11.5 11.7)" fill="#fff" fill-opacity=".95"/></svg>',
-    scripteditor: () => SQ('#f3f3f5', '<path d="M5 4.2h8.2v11.6H6.4A1.4 1.4 0 015 14.4z" fill="#fff" stroke="#a7a7ad" stroke-width=".7"/><path d="M6.6 7h5M6.6 9h5M6.6 11h3.4" stroke="#8a8a90" stroke-width=".7"/><path d="M15.6 6.4l1.2 1.2-6 6-1.7.5.5-1.7z" fill="#f2a33a" stroke="#c77a1a" stroke-width=".4"/>', 'rgba(0,0,0,.16)'),
     air: (id = nid('a')) => '<svg viewBox="0 0 20 20" aria-hidden="true"><defs><linearGradient id="' + id + '" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff9f4a"/><stop offset=".45" stop-color="#ff4f8b"/><stop offset="1" stop-color="#7a5cff"/></linearGradient></defs><rect x=".5" y=".5" width="19" height="19" rx="4.6" fill="url(#' + id + ')"/><g fill="none" stroke="#fff" stroke-width="1.1"><ellipse cx="10" cy="10" rx="5.6" ry="2.6"/><ellipse cx="10" cy="10" rx="5.6" ry="2.6" transform="rotate(60 10 10)"/><ellipse cx="10" cy="10" rx="5.6" ry="2.6" transform="rotate(120 10 10)"/></g></svg>',
     filevault: () => SQ('#8e8e93', '<path d="M4.4 9.6L10 5l5.6 4.6V15H4.4z" fill="none" stroke="#fff" stroke-width="1.3" stroke-linejoin="round"/><circle cx="10" cy="11.6" r="1.7" fill="none" stroke="#fff" stroke-width="1.1"/>'),
     accessories: () => SQ('#8e8e93', '<rect x="3.6" y="7.6" width="12.8" height="4.8" rx="2.4" fill="none" stroke="#fff" stroke-width="1.3"/>'),
@@ -135,9 +131,8 @@
     touchid: '<g fill="none" stroke="#e2445c" stroke-width="1" stroke-linecap="round"><path d="M5.6 8.4a4.6 4.6 0 018.8 0M6.8 14.8a7 7 0 01-.8-3.2 4 4 0 018 0v.6"/><path d="M8.6 15.6a6.6 6.6 0 01-.7-3.4 2.1 2.1 0 014.2 0c0 1.2.3 2.2.8 3.1M10 12.2c0 1.6.4 2.9 1.1 4"/></g>',
     users: '<circle cx="7.6" cy="7.6" r="2.2" fill="#fff"/><circle cx="12.8" cy="7.9" r="1.9" fill="#fff"/><path d="M3.8 14.4c.4-2.3 2-3.4 3.8-3.4s3.4 1.1 3.8 3.4zM11.4 14.4c-.1-1.3-.5-2.3-1.1-3 .8-.4 1.6-.5 2.5-.4 1.5.2 2.7 1.3 3 3.4z" fill="#fff"/>',
     gamecenter: '<circle cx="8" cy="8.4" r="3.4" fill="#ff5a6e"/><circle cx="12.6" cy="9" r="3" fill="#ffc53d" fill-opacity=".9"/><circle cx="10.6" cy="12.6" r="3.2" fill="#5ac8fa" fill-opacity=".9"/><circle cx="12.4" cy="12.4" r="2" fill="#7f5af0" fill-opacity=".85"/>',
-    general: '<circle cx="10" cy="10" r="3.6" fill="none" stroke="#fff" stroke-width="1.6" stroke-dasharray="1.9 1"/><circle cx="10" cy="10" r="1.5" fill="#fff"/>',
   };
-  const TILE = { appearance: '#1c1c1e', dock: '#1c1c1e', displays: '#2f7cf6', menubar: '#8e8e93', siri: 'linear', spotlight: '#8e8e93', wallpaper: '#30b0c7', notifications: '#ff3b30', sound: '#ff2d55', focus: '#5e5ce6', screentime: '#5e5ce6', lockscreen: '#1c1c1e', privacy: '#2f7cf6', touchid: '#ffffff', users: '#2f7cf6', gamecenter: '#ffffff', general: '#8e8e93' };
+  const TILE = { appearance: '#1c1c1e', dock: '#1c1c1e', displays: '#2f7cf6', menubar: '#8e8e93', siri: 'linear', spotlight: '#8e8e93', wallpaper: '#30b0c7', notifications: '#ff3b30', sound: '#ff2d55', focus: '#5e5ce6', screentime: '#5e5ce6', lockscreen: '#1c1c1e', privacy: '#2f7cf6', touchid: '#ffffff', users: '#2f7cf6', gamecenter: '#ffffff' };
   function tile(n) {
     const id = nid('t');
     const fill = TILE[n] === 'linear' ? 'url(#' + id + ')' : TILE[n];
@@ -160,14 +155,11 @@
     tabs: '<svg viewBox="0 0 17 17"><rect x="1.8" y="4.6" width="10.6" height="10.6" rx="2.4" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M4.8 2h7.8a2.4 2.4 0 012.4 2.4v7.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
     reload: '<svg viewBox="0 0 14 14"><path d="M11.6 7.2A4.6 4.6 0 117 2.6c1.6 0 2.9.7 3.8 1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M11.4 1.6v3.2H8.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     dlcircle: '<svg viewBox="0 0 18 18"><circle cx="9" cy="9" r="7.4" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M9 4.8v7.6M5.9 9.4L9 12.5l3.1-3.1" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-    arrowdl: '<svg viewBox="0 0 20 20"><path d="M10 2v11m0 0l-4.5-4.5M10 13l4.5-4.5M3 17h14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-    returnkey: '<svg viewBox="0 0 12 10"><path d="M10.5 1v4.4H2M4.6 2.6L1.6 5.4l3 2.8" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    globe: '<svg viewBox="0 0 15 15"><circle cx="7.5" cy="7.5" r="6.3" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M1.4 7.5h12.2M7.5 1.2c-3.2 3.4-3.2 9.2 0 12.6M7.5 1.2c3.2 3.4 3.2 9.2 0 12.6" fill="none" stroke="currentColor" stroke-width="1"/></svg>',
   };
-  const laptopLine = '<svg width="64" height="44" viewBox="0 0 64 44"><rect x="8" y="3" width="48" height="31" rx="3" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M2 38h60l-3 4H5z" fill="currentColor"/></svg>';
-  const macLine = '<svg width="64" height="44" viewBox="0 0 64 44"><rect x="8" y="3" width="48" height="31" rx="3" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M2 38h60l-3 4H5z" fill="currentColor"/><circle cx="32" cy="6" r="1" fill="currentColor"/></svg>';
 
-  // macOS arrow pointer, black with a white edge. Its tip sits at (1, 1) of
-  // the box, which is where the timeline engine puts the click point.
+  // The pointer: a black arrow with a white edge, our own drawing. Its tip sits
+  // at (1, 1) of the box, where the timeline engine puts the click point.
   function pointer(c) {
     const w = 14 * c + 3, h = 21 * c + 3;
     return '<div class="cur mk-cur"><svg viewBox="0 0 ' + w.toFixed(2) + ' ' + h.toFixed(2) + '" style="width:' + px(w) + ';height:' + px(h) + '"><g transform="translate(1 1) scale(' + c.toFixed(3) + ')">' +
@@ -180,8 +172,10 @@
     return '<div class="mk-sw' + (on ? ' on' : '') + (cls ? ' ' + cls : '') + '"><i class="tr"></i><i class="kn"><i class="kt"></i></i></div>';
   }
 
-  // System Settings sidebar, scrolled the way the captures show it. y is the
-  // centre of each row in window points.
+  // System Settings sidebar, scrolled the way the captures show it, 10 pt
+  // further so the band's lower edge falls between two rows. y is the centre
+  // of each row in window points.
+  const SIDE_SCROLL = -10;
   const SIDEBAR = [
     ['appearance', 'Appearance', 90], ['dock', 'Desktop &amp; Dock', 122], ['displays', 'Displays', 154], ['menubar', 'Menu Bar', 186], ['siri', 'Siri', 218], ['spotlight', 'Spotlight', 250], ['wallpaper', 'Wallpaper', 282],
     ['notifications', 'Notifications', 327], ['sound', 'Sound', 359], ['focus', 'Focus', 391], ['screentime', 'Screen Time', 423],
@@ -189,14 +183,14 @@
     ['gamecenter', 'Game Center', 609],
   ];
   function sidebar(sel) {
-    const rows = SIDEBAR.map((r) => '<div class="mk-si' + (r[0] === sel ? ' sel' : '') + '" style="top:' + (r[2] - 16) + 'px"><i class="ic">' + tile(r[0]) + '</i><span>' + r[1] + '</span></div>').join('');
+    const rows = SIDEBAR.map((r) => '<div class="mk-si' + (r[0] === sel ? ' sel' : '') + '" style="top:' + (r[2] + SIDE_SCROLL - 16) + 'px"><i class="ic">' + tile(r[0]) + '</i><span>' + r[1] + '</span></div>').join('');
     return '<div class="mk-side">' + rows + '<div class="mk-sfade"></div><div class="mk-search">' + GL.mag + '<span>Search</span></div>' + lights + '</div>';
   }
 
-  // One System Settings window. cfg: { x, y, sel, title, pane, edge, off, extra (in the
-  // content area), over (over the whole window, for sheets) }
+  // One System Settings window (740 x 625). cfg: { x, y, sel, title, pane,
+  // edge, off, cls, extra (in the content area), over (over the window) }
   function settingsWin(cfg) {
-    return '<div class="mk-win mk-set' + (cfg.off ? ' off' : '') + '" style="' + at(cfg.x, cfg.y) + '">' + sidebar(cfg.sel) +
+    return '<div class="mk-win mk-set' + (cfg.off ? ' off' : '') + (cfg.cls ? ' ' + cfg.cls : '') + '" style="' + at(cfg.x, cfg.y) + '">' + sidebar(cfg.sel) +
       '<div class="mk-main"><div class="mk-pane">' + cfg.pane + '</div>' +
       '<div class="mk-tb' + (cfg.edge ? ' edge' : '') + '"><div class="bf"><span class="b">' + GL.back + '</span><i></i><span class="f">' + GL.fwd + '</span></div><div class="ttl">' + cfg.title + '</div></div>' +
       (cfg.extra || '') + '</div>' + (cfg.over || '') + '</div>';
@@ -208,19 +202,28 @@
 
   // ---------- Panes (positions in pane points, from the captures) ----------
 
-  // Privacy & Security scrolled down to the Security section (sec-Security).
-  function paneSecurity(o, btnCls) {
+  // Privacy & Security scrolled down to the Security section. opt: { blocked
+  // (the "was blocked" message with Open Anyway), btn (class of that button),
+  // scroll (added to every y) }
+  function paneSecurity(o, opt) {
+    opt = opt || {};
+    const Y = (v) => v + (opt.scroll || 0);
     const app = esc(o.appName);
-    return group(-26.5, row(ICON.analytics(), 'Analytics &amp; Improvements', valChev('')) + row(ICON.ads(), 'Apple Advertising', valChev(''))) +
-      group(71, row(ICON.air(), 'Apple Intelligence Report', valChev('On')), 'height:42px') +
-      '<div class="mk-hdr" style="top:141.5px">Security</div>' +
-      group(169, '<div class="mk-r" style="height:37.5px"><span>Allow applications from</span><span class="sp"></span><span class="mk-pop">App Store &amp; Known Developers<b>' + GL.updown + '</b></span></div>') +
-      group(216.5, '<div class="mk-r" style="height:auto;align-items:flex-start;padding-top:6.5px;padding-bottom:10px;white-space:normal"><span style="width:272px;line-height:16px;margin-top:3.9px">' + q(app + '.app') + ' was blocked to protect your Mac.</span><span class="sp"></span><span class="mk-pb ' + (btnCls || '') + '" style="margin-right:0.5px">Open Anyway</span></div>' +
-        '<div class="mk-r" style="height:auto;padding-top:10.5px;padding-bottom:10px;white-space:normal;display:block"><span class="mk-note" style="display:block;color:var(--tx2)">Apple could not verify ' + q(app + '.app') + ' is free of malware that may harm your Mac or compromise your privacy.</span></div>') +
-      group(327.5, row(ICON.filevault(), 'FileVault', valChev('Off')) + row(ICON.accessories(), 'Accessories', valChev('Ask')) + row(ICON.shield(), 'Background Security Improvements', valChev(''))) +
-      group(465.5, row(ICON.hand(), 'Lockdown Mode', valChev('Off')), 'height:42px') +
-      '<div class="mk-desc" style="top:518px;left:30.5px;width:440px;color:var(--tx3)">Your Mac can reduce your exposure to digital threats by applying security limits to apps and features. This is intended for people in high-risk situations, such as journalists, activists, and public figures.</div>' +
-      '<div class="a" style="right:54.5px;top:579.5px"><span class="mk-pb" style="height:23.5px;width:94px;padding:0">Advanced…</span></div><div class="a" style="right:20.5px;top:579.5px"><span class="mk-help">?</span></div>';
+    let h = group(Y(-26.5), row(ICON.analytics(), 'Analytics &amp; Improvements', valChev('')) + row(ICON.ads(), 'Apple Advertising', valChev(''))) +
+      group(Y(71), row(ICON.air(), 'Apple Intelligence Report', valChev('On')), 'height:42px') +
+      '<div class="mk-hdr" style="top:' + px(Y(141.5)) + '">Security</div>' +
+      group(Y(169), '<div class="mk-r" style="height:37.5px"><span>Allow applications from</span><span class="sp"></span><span class="mk-pop">App Store &amp; Known Developers<b>' + GL.updown + '</b></span></div>');
+    let y = 216.5;
+    if (opt.blocked) {
+      h += group(Y(y), '<div class="mk-r" style="height:auto;align-items:flex-start;padding-top:6.5px;padding-bottom:10px;white-space:normal"><span style="width:272px;line-height:16px;margin-top:3.9px">' + q(app + '.app') + ' was blocked to protect your Mac.</span><span class="sp"></span><span class="mk-pb ' + (opt.btn || '') + '" style="margin-right:0.5px">Open Anyway</span></div>' +
+        '<div class="mk-r" style="height:auto;padding-top:10.5px;padding-bottom:10px;white-space:normal;display:block"><span class="mk-note" style="display:block;color:var(--tx2)">Apple could not verify ' + q(app + '.app') + ' is free of malware that may harm your Mac or compromise your privacy.</span></div>');
+      y = 327.5;
+    }
+    h += group(Y(y), row(ICON.filevault(), 'FileVault', valChev('Off')) + row(ICON.accessories(), 'Accessories', valChev('Ask')) + row(ICON.shield(), 'Background Security Improvements', valChev(''))) +
+      group(Y(y + 138), row(ICON.hand(), 'Lockdown Mode', valChev('Off')), 'height:42px') +
+      '<div class="mk-desc" style="top:' + px(Y(y + 190.5)) + ';left:30.5px;width:440px;color:var(--tx3)">Your Mac can reduce your exposure to digital threats by applying security limits to apps and features. This is intended for people in high-risk situations, such as journalists, activists, and public figures.</div>' +
+      '<div class="a" style="right:54.5px;top:' + px(Y(y + 252)) + '"><span class="mk-pb" style="height:23.5px;width:94px;padding:0">Advanced…</span></div><div class="a" style="right:20.5px;top:' + px(Y(y + 252)) + '"><span class="mk-help">?</span></div>';
+    return h;
   }
 
   // A privacy list with switches (Screen & System Audio Recording style).
@@ -228,103 +231,116 @@
     const rows = apps.map((a) => '<div class="mk-r ic" style="height:40px"><i class="ic">' + a[0] + '</i><span>' + a[1] + '</span><span class="sp"></span>' + sw(a[2], a[3]) + '</div>').join('');
     return group(y, (header || '') + rows + '<div class="mk-pm">' + GL.plus + '<i></i>' + GL.minus + '</div>');
   }
+  // Only apps that asked are listed (Apple's own tools never are), so on the
+  // person's Mac the list holds just our app.
   function paneScreen(o, on, tgt) {
     return '<div class="mk-hdr" style="top:63px">Screen &amp; System Audio Recording</div>' +
       '<div class="mk-desc" style="top:81px">Allow the applications below to record the content of your screen and audio, even<br>while using other applications.</div>' +
-      appList(119.5, [[ICON.quicktime(), 'QuickTime Player', true], [ICON.screenshot(), 'Screenshot', true], [appIcon('', true), esc(o.appName) + '.app', on, tgt ? 'tgt' : '']]);
+      appList(119.5, [[appIcon('', true), esc(o.appName) + '.app', on, tgt ? 'tgt' : '']]);
   }
-  function paneAx(o, on) {
+  function paneAx(o, on, tgt) {
     const head = '<div class="mk-r" style="height:68px;align-items:flex-start;padding-top:12.4px;white-space:normal;color:var(--tx2)"><span>Apps with this access can view and send email, edit contacts and photos, monitor your keyboard, track websites, record your screen, control any app on your Mac, and more.</span></div><div style="height:1px;background:var(--sep)"></div>';
-    return appList(64, [[ICON.scripteditor(), 'Script Editor', true], [ICON.shortcuts(), 'Shortcuts', true], [appIcon('', true), esc(o.appName) + '.app', on, 'tgt']], head);
+    return appList(64, [[appIcon('', true), esc(o.appName) + '.app', on, tgt ? 'tgt' : '']], head);
   }
   // Login Items, scrolled so Background App Activity sits under the toolbar.
-  function paneLogin(o) {
+  function paneLogin(o, on, tgt) {
     const s = 170;
     return '<div class="mk-g" style="top:' + (105.5 - s) + 'px;height:118.5px"><div class="mk-r" style="height:27.5px;background:color-mix(in srgb,var(--grp) 80%,var(--tx) 6%);font-size:12px"><span style="width:236px">Item</span><span>Kind</span></div>' +
       '<div class="a" style="left:0;right:0;bottom:0;height:24.5px"><div class="mk-pm" style="height:24.5px">' + GL.plus + '<i></i>' + GL.minus + '</div></div></div>' +
       '<div class="mk-hdr" style="top:' + (254.5 - s) + 'px">Background App Activity</div>' +
       '<div class="mk-desc" style="top:' + (273 - s) + 'px">These apps can automatically run in the background to do things like sync data and<br>check for updates.</div>' +
-      group(311 - s, '<div class="mk-r two"><i class="ic">' + appIcon('', true) + '</i><span><span class="nm">' + esc(o.appName) + '</span><span class="st">Not running in background</span></span><span class="sp"></span>' + sw(false, 'tgt') + '</div>');
-  }
-  // Displays with two displays: the arrangement sheet over the pane.
-  function paneDisplays() {
-    const dw = nid('w');
-    const mbp = '<svg viewBox="0 0 120 76" width="120" height="76"><rect x="12" y="2" width="96" height="62" rx="5" fill="#1b1b1d" stroke="#6b6b70" stroke-width="1"/><rect x="16" y="6" width="88" height="54" rx="1.5" fill="url(#' + dw + ')"/><path d="M2 66h116l-3 6.5c-.5 1-1.4 1.5-2.5 1.5H7.5c-1.1 0-2-.5-2.5-1.5z" fill="#9b9ca1"/><rect x="50" y="2" width="20" height="3" rx="1.5" fill="#1b1b1d"/></svg>';
-    const mon = '<svg viewBox="0 0 120 76" width="120" height="76"><rect x="6" y="2" width="108" height="62" rx="4" fill="#1b1b1d" stroke="#6b6b70" stroke-width="1"/><rect x="10" y="6" width="100" height="54" rx="1.5" fill="url(#' + dw + ')"/><path d="M52 64h16l2 8H50z" fill="#8c8d92"/><rect x="42" y="71" width="36" height="3" rx="1.5" fill="#a3a4a9"/></svg>';
-    return '<svg width="0" height="0" style="position:absolute"><defs><linearGradient id="' + dw + '" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2a3d9a"/><stop offset=".5" stop-color="#6a3aa8"/><stop offset="1" stop-color="#c0508a"/></linearGradient></defs></svg>' +
-      '<div class="mk-dth" style="left:94px;top:84px;width:140px">' + mbp + '<div style="margin-top:12px">Built-in Display</div></div>' +
-      '<div class="mk-dth" style="left:274px;top:84px;width:140px;font-weight:400">' + mon + '<div style="margin-top:12px">USB-C Display</div></div>' +
-      '<div class="a" style="left:0;right:0;top:210px;height:1px;background:var(--sep)"></div>' +
-      group(231, row(null, 'Use as', '<span class="val" style="margin-right:4px">Main display</span><span class="mk-pop"><b>' + GL.updown + '</b></span>') + row(null, 'Resolution', '<span class="val">Default</span>')) +
-      group(330, row(null, 'Brightness', '') + row(null, 'Automatically adjust brightness', sw(true)) + row(null, 'True Tone', sw(true)));
+      group(311 - s, '<div class="mk-r two"><i class="ic">' + appIcon('', true) + '</i><span><span class="nm">' + esc(o.appName) + '</span><span class="st">Not running in background</span></span><span class="sp"></span>' + sw(on, tgt ? 'tgt' : '') + '</div>');
   }
 
   // ---------- Dialogs ----------
-  // Gatekeeper-style alert. cfg: { x, y, icon, title, body: [..], field, buttons: [[label, cls]], row, help }
+  // An alert (260 pt, round, glass). cfg: { x, y, cls, icon (none for a
+  // sheet), title, body: [..], field, buttons: [[label, cls]], row (side by side), help }
   function alertBox(cfg) {
     return '<div class="mk-al ' + (cfg.cls || '') + '"' + (cfg.x != null ? ' style="' + at(cfg.x, cfg.y) + '"' : '') + '>' + (cfg.help ? '<div class="q">?</div>' : '') +
-      '<div class="ai">' + cfg.icon + '</div><h4>' + cfg.title + '</h4>' + (cfg.body || []).map((p) => '<p>' + p + '</p>').join('') + (cfg.field || '') +
+      (cfg.icon ? '<div class="ai">' + cfg.icon + '</div>' : '') + '<h4>' + cfg.title + '</h4>' + (cfg.body || []).map((p) => '<p>' + p + '</p>').join('') + (cfg.field || '') +
       '<div class="bt' + (cfg.row ? ' row' : '') + '">' + cfg.buttons.map((b) => '<div class="' + (b[1] || '') + '">' + b[0] + '</div>').join('') + '</div></div>';
   }
-  // Permission prompt (Screen Recording, Device Control and Data Access).
+  // A permission prompt (Screen Recording, Device Control and Data Access).
   function prompt(cfg) {
-    return '<div class="mk-pr ' + (cfg.cls || '') + '" style="' + at(cfg.x, cfg.y) + '"><div class="bar">' + cfg.title + '</div><div class="lk">' + lockIcon(cfg.badge) + '</div>' +
+    return '<div class="mk-pr ' + (cfg.cls || '') + '"><div class="bar">' + cfg.title + '</div><div class="lk">' + lockIcon(cfg.badge) + '</div>' +
       '<div class="tx"><b>' + cfg.msg + '</b><p>Grant access to this application in Privacy &amp; Security<br>settings, located in System Settings.</p></div>' +
       '<span class="mk-help">?</span><div class="bt"><div class="tgt">Open System Settings</div><div>Deny</div></div></div>';
   }
+  // The authentication dialog (Touch ID or password).
+  function authBox(cls, btnCls) {
+    const field = '<div class="fldw"><div class="fld pw"><span class="ph">Password</span><span class="dots"></span></div><i class="fr"></i></div>';
+    return alertBox({ cls, icon: settingsIcon(), title: 'Privacy &amp; Security',
+      body: ['Privacy &amp; Security is trying to modify your system settings. Touch ID or enter your password to allow this.'],
+      field, row: true, buttons: [['Cancel', ''], ['Modify Settings', 'def ' + btnCls]] });
+  }
 
   // ---------- Safari ----------
-  const SAF = { x: 326, y: 120, w: 860, h: 640 };
-  // The download page. state: 'dl' (before) or 'after' (download started).
-  // tgt: the page's main button is what the pointer clicks.
-  function page(o, state, top, tgt) {
-    const T = tgt ? ' tgt' : '';
+  const SAF = { x: 326, y: 120, w: 860, h: 700 };
+  // The download page (web/index.html, SPEC §8) at 1 CSS px = 1 pt, as
+  // Safari shows it. st: 'A' (loaded), 'B' (after Download), 'C' (allow it in
+  // Privacy & Security). tgt marks the page's main button for the pointer.
+  function page(o, st, cls, tgt) {
     const n = esc(o.appName);
-    let h = '<div class="mk-page" style="top:' + px(top) + '"><main><div class="icon">' + appIcon() + '</div><h1>' + n + '</h1><p class="pl">Use your laptop as a second screen for this Mac.</p>' +
-      '<div class="path"><span>' + laptopLine + 'Your laptop</span><div class="wire"></div><span>' + macLine + 'This Mac</span></div>';
-    if (state === 'dl') {
-      h += '<div class="dl' + T + '">' + GL.arrowdl + 'Download ' + n + '</div>';
+    const T = tgt ? ' tgt' : '';
+    const meta = '<p class="meta">' + (o.appSize ? esc(o.appSize) + ' · ' : '') + 'Comes from your PC through the cable, not from the internet.</p>';
+    let line, act, foot = meta;
+    if (st === 'A') {
+      line = 'Use your Windows PC as a display for this Mac.';
+      act = '<span class="cap pri' + T + '">Download</span>';
+    } else if (st === 'B') {
+      line = 'Open ' + n + ' from Safari’s Downloads.' + (o.notarized ? '' : ' When your Mac says it can’t verify the app, click <b>Done</b>, not <span class="nw">Move to Trash</span>.');
+      act = '<span class="cap sec">Download Again</span>';
     } else {
-      h += '<div class="dl again">' + GL.arrowdl + 'Download again</div>';
+      line = 'To open ' + n + ', allow it in Privacy &amp; Security.';
+      act = '<span class="cap pri' + T + '">Open Privacy &amp; Security</span><p class="nt">If you clicked Move to Trash, click Download Again.</p><span class="cap sec">Download Again</span>';
+      foot = '';
     }
-    h += '<p class="meta">For Mac · 8 MB<br>This file comes from your laptop, through the cable. Not from the internet.</p>';
-    if (state !== 'dl') {
-      h += '<div class="box"><h2>While it downloads</h2><ol><li>If Safari asks whether to allow downloads, click <b>Allow</b>.</li><li>Open <b>' + n + '</b> from your Downloads. If your Mac says it can’t check the app, click <b>Done</b>, not Move to Trash.</li></ol></div>' +
-        '<div class="box"><h2>Your Mac said it can’t check the app?</h2><p>Click <b>Done</b> in that box, then click below. In the window that opens, click <b>Open Anyway</b>.</p><div class="dl' + T + '">Open Privacy &amp; Security</div><p class="meta">If Safari asks to open System Settings, click <b>Allow</b>.</p></div>';
-    }
-    return h + '</main></div>';
+    return '<div class="mk-page st-' + st + (cls ? ' ' + cls : '') + '"><main><div class="icon">' + appIcon() + '</div><h1>' + n + '</h1><p class="pl">' + line + '</p><div class="act">' + act + '</div>' + foot + '</main></div>';
   }
-  // cfg: { addr: html for the address field area, page: html, off, dl: true to show the downloads button, extra }
+  // cfg: { addr (the address field area), page, off, dl (downloads button), extra }
   function safariWin(o, cfg) {
-    const w = SAF.w;
     const right = '<div class="pill" style="right:12px;width:' + (cfg.dl ? 142 : 108) + 'px;justify-content:space-around;padding:0 4px">' + (cfg.dl ? '<span class="dlb">' + GL.dlcircle + '</span>' : '') + GL.share + GL.newtab + GL.tabs + '</div>';
-    return '<div class="mk-win mk-saf' + (cfg.off ? ' off' : '') + '" style="' + at(SAF.x, SAF.y, w, SAF.h) + '"><div class="vp">' + cfg.page + '</div>' +
+    return '<div class="mk-win mk-saf' + (cfg.off ? ' off' : '') + '" style="' + at(SAF.x, SAF.y, SAF.w, SAF.h) + '"><div class="vp">' + cfg.page + '</div>' +
       '<div class="stb">' + lights + '<div class="pill" style="left:92px;width:112px;justify-content:space-between;padding:0 3px">' + GL.sidebar + '<span style="display:flex">' + GL.back.replace('<svg', '<svg style="width:9px;height:15px;margin:0 8px"') + '<span class="fd">' + GL.fwd.replace('<svg', '<svg style="width:9px;height:15px;margin:0 8px"') + '</span></span></div>' +
       cfg.addr + right + '</div>' + (cfg.extra || '') + '</div>';
   }
   const ADDR_W = 388, ADDR_X = (SAF.w - ADDR_W) / 2;
   const addrIdle = (host, cls, extra) => '<div class="mk-addr ' + (cls || '') + '" style="left:' + ADDR_X + 'px;width:' + ADDR_W + 'px">' + (extra || '') + '<span class="url">' + esc(host) + '</span><span class="rl">' + GL.reload + '</span></div>';
+  // Safari's own question, over the page (window points): an alert run as a
+  // sheet, so no icon and the lighter sheet card (V8: verify on the Mac).
+  const safariSheet = (title, body, cls) => '<div class="mk-dim" style="top:52px"></div>' +
+    alertBox({ x: SAF.w / 2 - 130, y: 64, cls: 'dlg mat sheet ' + (cls || ''), icon: '', title, body, row: true, buttons: [['Cancel', ''], ['Allow', 'def tgt']] });
 
   // ---------- Desktop ----------
-  function menubar(o) {
+  // The Mac's clock: the time now, so the picture matches the person's own
+  // menu bar; a fixed Fri Oct 16 9:41 AM in screenshots (?shot=1).
+  const isShot = () => document.documentElement.classList.contains('shot');
+  const timeOf = (d) => (isShot() ? '9:41 AM' : d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).replace(/\s/g, '\u00a0'));
+  const clockOf = (d) => (isShot() ? 'Fri Oct 16' : d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).replace(/,/g, '')) + '\u00a0\u00a0' + timeOf(d);
+  let clockTimer = 0;
+  function tickClock() {
+    const els = document.querySelectorAll('.mk .mk-menu .clk');
+    if (!els.length) { clearInterval(clockTimer); clockTimer = 0; return; }
+    const t = clockOf(new Date());
+    els.forEach((e) => { if (e.textContent !== t) e.textContent = t; });
+  }
+  function menubar() {
+    if (!clockTimer && !isShot()) clockTimer = setInterval(tickClock, 10000);
     const wifi = '<svg viewBox="0 0 18 14"><path d="M9 13.2l2.4-2.9a3.8 3.8 0 00-4.8 0zM4.3 7.6l1.4 1.7a5.2 5.2 0 016.6 0l1.4-1.7a7.4 7.4 0 00-9.4 0zM1.5 4.3l1.4 1.7a9.6 9.6 0 0112.2 0l1.4-1.7a11.8 11.8 0 00-15 0z"/></svg>';
     const batt = '<svg viewBox="0 0 28 13"><rect x=".7" y=".7" width="23.6" height="11.6" rx="3.4" fill="none" stroke="currentColor" stroke-opacity=".45" stroke-width="1.1"/><rect x="2.3" y="2.3" width="17.4" height="8.4" rx="2"/><path d="M25.8 4.5v4c.9-.3 1.4-1.1 1.4-2s-.5-1.7-1.4-2z" fill-opacity=".45"/></svg>';
     const search = '<svg viewBox="0 0 14 14"><circle cx="5.8" cy="5.8" r="4.4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9.1 9.1l3.5 3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
     const cc = '<svg viewBox="0 0 16 14"><rect x=".8" y="1" width="14.4" height="5" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="12.7" cy="3.5" r="1.4"/><rect x=".8" y="8" width="14.4" height="5" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="3.3" cy="10.5" r="1.4"/></svg>';
-    return '<div class="mk-menu" style="width:' + SCREEN.w + 'px">' + batt + wifi + search + cc + '<span>Fri Oct 16&nbsp;&nbsp;9:41 AM</span></div>';
+    return '<div class="mk-menu" style="width:' + SCREEN.w + 'px">' + batt + wifi + search + cc + '<span class="clk">' + clockOf(new Date()) + '</span></div>';
   }
 
   // ---------- Timeline helpers ----------
   const EASE = 'cubic-bezier(.42,0,.22,1)';
-  // Pointer moves from a canvas point to a target and stays there.
-  const glide = (t0, t1, from, sel, dx, dy) => [[t0, from[0], from[1], EASE], [t1, sel, dx || 0, dy || 0]];
   // The control looks pressed while the button is down.
   function press(o, sel, t, accent) {
     const f = o.dark ? (accent ? 'brightness(1.16)' : 'brightness(1.5)') : (accent ? 'brightness(.86)' : 'brightness(.9)');
     return [sel, [{ offset: 0, filter: 'brightness(1)' }, { offset: t - 0.004, filter: 'brightness(1)' }, { offset: t, filter: f }, { offset: t + 0.03, filter: f }, { offset: t + 0.045, filter: 'brightness(1)' }, { offset: 1, filter: 'brightness(1)' }]];
   }
-  // A switch turning on at t, holding until z (then off for the next loop).
-  // The knob stretches a little on the way, like the real one.
+  // A switch turning on at t and staying on until z.
   function switchOn(sel, t, z) {
     const op = [{ offset: 0, opacity: 0 }, { offset: t, opacity: 0 }, { offset: t + 0.03, opacity: 1 }, { offset: z, opacity: 1 }, { offset: z + 0.01, opacity: 0 }, { offset: 1, opacity: 0 }];
     return [[sel + ' .tr', op], [sel + ' .kt', op],
@@ -332,238 +348,291 @@
         { offset: t + 0.016, transform: 'translateX(7px) scaleX(1.18)', easing: 'cubic-bezier(.2,.8,.3,1.1)' }, { offset: t + 0.04, transform: 'translateX(12px) scaleX(1)' },
         { offset: z, transform: 'translateX(12px) scaleX(1)' }, { offset: z + 0.01, transform: 'translateX(0) scaleX(1)' }, { offset: 1, transform: 'translateX(0) scaleX(1)' }]]];
   }
-  // A standard loop: pointer comes in, hovers the target, clicks it.
-  function clickLoop(o, from, sel, opt) {
+  // The teaching loop: the pointer glides in from (fx, fy) away from the
+  // target, rests on it, clicks, and holds. opt: { from: [fx, fy], click,
+  // dx, dy, accent, dur }. By default the tip rests 6 canvas units below the
+  // middle of the target, under its label, so the arrow never hides the word
+  // the sentence names. A button with another one right below it gets dx 40,
+  // dy 2 (beside its label, clear of the next button's label).
+  function clickLoop(o, sel, opt) {
     opt = opt || {};
-    const t = opt.click || 0.6;
+    const t = opt.click || 0.5, a = opt.arrive || 0.3, s = opt.start || 0.06, z = opt.leave || 0.94;
+    const f = opt.from || [140, 70], dx = opt.dx || 0, dy = opt.dy != null ? opt.dy : 6;
+    // after: the pointer steps aside once the click is done, so what changed shows.
+    const aw = opt.after ? [[t + 0.06, sel, dx, dy, EASE], [t + 0.16, sel, dx + opt.after[0], dy + opt.after[1]], [z, sel, dx + opt.after[0], dy + opt.after[1]]] : [[z, sel, dx, dy]];
     return {
-      cursor: glide(opt.start || 0.08, opt.arrive || 0.36, from, sel, opt.dx, opt.dy).concat([[opt.leave || 0.94, sel, opt.dx || 0, opt.dy || 0]]),
-      cursorVis: [[opt.start || 0.08, opt.leave || 0.94]],
-      halo: [[sel, (opt.arrive || 0.36) - 0.06, t]],
-      clicks: [[t, sel, opt.dx || 0, opt.dy || 0]],
+      dur: opt.dur || 6500,
+      cursor: [[s, sel, dx + f[0], dy + f[1], EASE], [a, sel, dx, dy]].concat(aw),
+      cursorVis: [[s, z]],
+      halo: [[sel, a - 0.04, t]],
+      clicks: [[t, sel, dx, dy]],
       anim: [press(o, sel, t, opt.accent)],
     };
   }
 
-  // ---------- Variants ----------
-  // Each returns { cam: { x, y, s }, layers, tl, poster }. cam is the Mac
-  // point shown at the canvas's top-left corner and the scale.
-  const WIN = { x: 280, y: 150 };
-  const CAM_SET = { x: WIN.x + 200, y: WIN.y - 14, s: 0.72 };
-  // A dialog centred in what the camera shows, whatever its height.
-  const centred = (cam, html, dy) => '<div class="mk-ctr" style="' + at(cam.x, cam.y + (dy || 0), 400 / cam.s, 250 / cam.s) + '">' + html + '</div>';
-
+  // ---------- Scenes ----------
+  // Each returns { cam: {x, y, s}, layers, tl, poster, still? }. The family
+  // groups scenes that share one screen layout (a pan within a family keeps
+  // every window in place).
   const V = {};
+  const FAMILY = {};
+  const def = (name, family, fn) => { V[name] = fn; FAMILY[name] = family; };
+  const view = (cam) => ({ w: CANVAS.w / cam.s, h: CANVAS.h / cam.s });
+  // A dialog centred in what the camera shows.
+  const centred = (cam, html, dy) => { const v = view(cam); return '<div class="mk-ctr" style="' + at(cam.x, cam.y + (dy || 0), v.w, v.h) + '">' + html + '</div>'; };
   const appApp = (o) => esc(o.appName) + '.app';
   const isDefault = (o) => o.appName === 'USB-C Display';
 
-  // Gatekeeper: "Not Opened". The highlighted button is Move to Trash; the one to click is Done.
-  V['gk-notopened'] = function (o) {
-    const cam = { x: 478, y: 158, s: 0.72 };
-    const body = isDefault(o) ? 'Apple could not verify “USB-C<br>Display.app” is free of malware that<br>may harm your Mac or compromise<br>your privacy.' : 'Apple could not verify ' + q(appApp(o)) + ' is free of malware that may harm your Mac or compromise your privacy.';
-    const title = isDefault(o) ? q(appApp(o)) + '<br>Not Opened' : q(appApp(o)) + ' Not Opened';
-    const dlg = alertBox({ cls: 'dlg', icon: vaultIcon(), title, body: [body], help: true, buttons: [['Move to Trash', 'def'], ['Done', 'tgt']] });
-    const tl = Object.assign({ dur: 6500, vis: [['.dlg', [[0.03, 0.7]], 'pop']] }, clickLoop(o, [345, 238], '.tgt', { click: 0.6 }));
-    return { cam, layers: centred(cam, dlg), tl, poster: 0.5 };
-  };
+  // ---- Safari (family "safari": one Safari window, several cameras) ----
+  // The whole window width with its toolbar and the top of the page.
+  const CAM_SAF = { x: 286, y: 100, s: 0.85 };
+  // The page column: state A/B from the icon to the meta line; state C from
+  // the icon down to Download Again (the crop falls through the icon).
+  const CAM_COL_A = { x: 286, y: 319.5, s: 0.85 };
+  const CAM_COL_C = { x: 286, y: 319.5, s: 0.85 };
 
-  // The trio below shares one window and one camera, so the wizard can cycle
-  // them without the picture jumping.
-  function securityWin(o, off, btnCls) {
-    return settingsWin({ x: WIN.x, y: WIN.y, sel: 'privacy', title: 'Privacy &amp; Security', edge: true, off, pane: paneSecurity(o, btnCls) });
-  }
-  V['gk-settings'] = function (o) {
-    const tl = Object.assign({ dur: 6500 }, clickLoop(o, [150, 236], '.tgt', { click: 0.6 }));
-    return { cam: CAM_SET, layers: securityWin(o, false, 'tgt'), tl, poster: 0.5 };
-  };
-  V['gk-confirm'] = function (o) {
-    const dlg = alertBox({ cls: 'dlg', icon: vaultIcon(), title: 'Open ' + q(appApp(o)) + '?', help: true,
-      body: ['Apple is not able to verify that it is free from malware that could harm your Mac or compromise your privacy.'],
-      buttons: [['Open Anyway', 'def tgt'], ['Done', '']] });
-    // The pointer starts where gk-settings left it, so cycling the two reads as one move.
-    const tl = Object.assign({ dur: 6500, vis: [['.dlg', [[0.03, 0.7]], 'pop']] }, clickLoop(o, [329, 179], '.tgt', { click: 0.6, accent: true }));
-    return { cam: CAM_SET, layers: securityWin(o, true) + centred(CAM_SET, dlg), tl, poster: 0.5 };
-  };
-  V['password'] = function (o) {
-    const field = '<div class="fldw"><div class="fld pw"><span class="ph">Password</span><span class="dots"></span></div><i class="fr"></i></div>';
-    const dlg = alertBox({ cls: 'dlg', icon: settingsIcon(), title: 'Privacy &amp; Security',
-      body: ['Privacy &amp; Security is trying to modify your system settings. Touch ID or enter your password to allow this.'],
-      field, row: true, buttons: [['Cancel', ''], ['Modify Settings', 'def tgt']] });
-    const tl = {
-      dur: 8500,
-      vis: [['.dlg', [[0.02, 0.86]], 'pop'], ['.pw .ph', [[0, 0.3]]], ['.fr', [[0.27, 0.86]]]],
-      type: [['.pw .dots', '••••••••', 0.31, 0.45, 0.86]],
-      // To the field, click, wait while the password goes in, then to the button.
-      cursor: [[0.06, 200, 181, EASE], [0.22, '.pw', 30, 1], [0.5, '.pw', 30, 1, EASE], [0.64, '.tgt'], [0.95, '.tgt']],
-      cursorVis: [[0.06, 0.95]],
-      halo: [['.pw', 0.16, 0.27], ['.tgt', 0.6, 0.76]],
-      clicks: [[0.26, '.pw', 30, 1], [0.76, '.tgt']],
-      anim: [press(o, '.tgt', 0.76, true)],
-    };
-    return { cam: CAM_SET, layers: securityWin(o, true) + centred(CAM_SET, dlg), tl, poster: 0.68 };
-  };
-
-  // Notification banner at the top right. Nothing to click.
-  V['bg-items'] = function (o) {
-    const cam = { x: SCREEN.w - 500, y: 0, s: 0.8, noCursor: true };
-    const note = '<div class="mk-note-b nt" style="' + at(SCREEN.w - 12 - 344, 42) + '"><i class="ic">' + settingsIcon() + '</i><div class="bd"><b>Background Items Added</b><p>' + q(esc(o.appName)) + ' added items that can run in the background. You can manage this in Login Items Settings.</p></div><span class="tm">now</span></div>';
-    const tl = { dur: 7000, vis: [['.nt', [[0.06, 0.9]], 'slideL']] };
-    return { cam, layers: menubar(o) + note, tl, poster: 0.5 };
-  };
-
-  // Permission prompts.
-  function promptVariant(o, title, badge, msg) {
-    const cam = { x: 756 - 250, y: 340 - 156.25, s: 0.8 };
-    const pr = prompt({ x: 756 - 230.5, y: 340 - 90.5, cls: 'dlg', title, badge, msg });
-    const tl = Object.assign({ dur: 6500, vis: [['.dlg', [[0.03, 0.7]], 'pop']] }, clickLoop(o, [330, 232], '.tgt', { click: 0.6 }));
-    return { cam, layers: pr, tl, poster: 0.5 };
-  }
-  V['screen-prompt'] = (o) => promptVariant(o, 'Screen Recording', 'record',
-    isDefault(o) ? q(appApp(o)) + ' would like to record this<br>computer’s screen and audio.' : q(appApp(o)) + ' would like to record this computer’s screen and audio.');
-  V['ax-prompt'] = (o) => promptVariant(o, 'Device Control and Data Access', 'folder',
-    isDefault(o) ? q(appApp(o)) + ' would like to control this Mac<br>and access your data.' : q(appApp(o)) + ' would like to control this Mac and access your data.');
-
-  // Privacy lists: click the app's switch.
-  function listVariant(o, title, pane) {
-    const tl = Object.assign({ dur: 7000 }, clickLoop(o, [150, 236], '.tgt', { click: 0.56 }));
-    tl.anim = tl.anim.concat(switchOn('.tgt', 0.565, 0.95));
-    return { cam: CAM_SET, layers: settingsWin({ x: WIN.x, y: WIN.y, sel: 'privacy', title, pane }), tl, poster: 0.5 };
-  }
-  V['screen-list'] = (o) => listVariant(o, 'Screen &amp; System Audio Recording', paneScreen(o, false, true));
-  V['ax-list'] = (o) => listVariant(o, 'Device Control and Data Access', paneAx(o, false));
-  V['login-list'] = function (o) {
-    const tl = Object.assign({ dur: 7000 }, clickLoop(o, [150, 236], '.tgt', { click: 0.56 }));
-    tl.anim = tl.anim.concat(switchOn('.tgt', 0.565, 0.95));
-    return { cam: CAM_SET, layers: settingsWin({ x: WIN.x, y: WIN.y, sel: '', title: 'Login Items', edge: true, pane: paneLogin(o) }), tl, poster: 0.5 };
-  };
-
-  // After the switch: macOS asks to quit and reopen the app.
-  V['screen-reopen'] = function (o) {
-    const msg = q(appApp(o)) + ' may not be able to record the contents of your screen until it is quit.';
-    const dlg = alertBox({ cls: 'dlg', icon: appIcon(), title: msg, row: true, buttons: [['Later', ''], ['Quit &amp; Reopen', 'def tgt']] });
-    // From the switch the user just turned on.
-    const tl = Object.assign({ dur: 6500, vis: [['.dlg', [[0.03, 0.7]], 'pop']] }, clickLoop(o, [354, 171], '.tgt', { click: 0.6, accent: true }));
-    return { cam: CAM_SET, layers: settingsWin({ x: WIN.x, y: WIN.y, sel: 'privacy', title: 'Screen &amp; System Audio Recording', off: true, pane: paneScreen(o, true) }) + centred(CAM_SET, dlg), tl, poster: 0.5 };
-  };
-
-  // Displays: drag USB-C Display next to the MacBook in the arrangement sheet.
-  V['displays'] = function (o) {
-    const sw0 = 400 / CAM_SET.s;
-    const sheet = { w: 420, h: 262 };
-    const sx = CAM_SET.x + (sw0 - sheet.w) / 2 - WIN.x, sy = 62;
-    // Inside the arrangement area: MacBook in the middle-left, USB-C Display to its right.
-    const area = '<div class="area">' +
-      '<div class="mk-disp" style="' + at(78, 26, 120, 78) + '"><i class="wl"></i><i class="mb"></i><span>Built-in Display</span></div>' +
-      '<div class="mk-disp drag usb" style="' + at(198, 30, 112, 70) + '"><i class="wl"></i><span>USB-C Display</span></div></div>';
-    const arr = '<div class="mk-dim"></div><div class="mk-arr" style="' + at(sx, sy, sheet.w, sheet.h) + '"><div class="txt">To rearrange displays, drag them to the desired position. To relocate the menu bar, drag it to a different display.</div>' + area +
-      '<div class="a" style="right:18px;bottom:16px"><span class="mk-pb" style="background:var(--ac);color:var(--ac-tx);padding:0 18px">Done</span></div></div>';
-    const win = settingsWin({ x: WIN.x, y: WIN.y, sel: 'displays', title: 'Displays', pane: paneDisplays(), over: arr });
-    // The display starts lower right and is dragged into place (in pane points; the cursor
-    // follows it in canvas units, which is points times the scale).
-    const k = CAM_SET.s, ox = 44, oy = 24;
-    const tl = {
-      dur: 7500,
-      anim: [['.usb', [{ offset: 0, transform: 'translate(' + ox + 'px,' + oy + 'px)' }, { offset: 0.34, transform: 'translate(' + ox + 'px,' + oy + 'px)', easing: EASE }, { offset: 0.66, transform: 'translate(0,0)' }, { offset: 0.96, transform: 'translate(0,0)' }, { offset: 0.99, transform: 'translate(' + ox + 'px,' + oy + 'px)' }, { offset: 1, transform: 'translate(' + ox + 'px,' + oy + 'px)' }]],
-        ['.usb', [{ offset: 0, boxShadow: '0 0 0 1.5px rgba(0,0,0,.55), 0 2px 6px rgba(0,0,0,.3)' }, { offset: 0.3, boxShadow: '0 0 0 1.5px rgba(0,0,0,.55), 0 2px 6px rgba(0,0,0,.3)' }, { offset: 0.32, boxShadow: '0 0 0 2px #fff, 0 8px 18px rgba(0,0,0,.45)' }, { offset: 0.68, boxShadow: '0 0 0 2px #fff, 0 8px 18px rgba(0,0,0,.45)' }, { offset: 0.7, boxShadow: '0 0 0 1.5px rgba(0,0,0,.55), 0 2px 6px rgba(0,0,0,.3)' }, { offset: 1, boxShadow: '0 0 0 1.5px rgba(0,0,0,.55), 0 2px 6px rgba(0,0,0,.3)' }]]],
-      cursor: [[0.06, 320, 230, EASE], [0.28, '.usb', ox * k, oy * k], [0.34, '.usb', ox * k, oy * k, EASE], [0.66, '.usb', 0, 0], [0.94, '.usb', 0, 0]],
-      cursorVis: [[0.06, 0.94]],
-      halo: [],
-      clicks: [[0.31, '.usb', ox * k, oy * k]],
-    };
-    return { cam: Object.assign({ cls: 'sq' }, CAM_SET), layers: win, tl, poster: 0.5 };
-  };
-
-  // ---------- Safari ----------
-  // Toolbar and the top of the page; the same framing for typing the address
-  // and for Safari's own question, so the two read as the same window.
-  const CAM_SAF = { x: SAF.x + 118, y: SAF.y - 12, s: 0.78 };
-  // A close-up of the page around its main button. top: the first page row
-  // shown, in window points (measured: Download is at 465-525, Open Privacy &
-  // Security at 391-447 with the page scrolled).
-  const camPage = (top) => ({ x: SAF.x + SAF.w / 2 - 322.6, y: SAF.y + top, s: 0.62 });
-  const PAGE_TOP = 92;          // the card starts below the toolbar (the page scrolls when taller)
-  const SCROLL_AFTER = 560;     // how far the "after" page is scrolled to show its new button
-
-  V['safari-type'] = function (o) {
+  def('safari-type', 'safari', function (o) {
     const host = o.host;
     const box = 'left:' + ADDR_X + 'px;width:' + ADDR_W + 'px';
-    const pg = '<div class="start"></div><div class="pg">' + page(o, 'dl', PAGE_TOP) + '</div>';
+    const pg = '<div class="mk-start"></div>' + page(o, 'A', 'pg');
     // What Safari suggests once the address is typed; the top hit goes with Return.
-    const globe = '<svg viewBox="0 0 15 15"><circle cx="7.5" cy="7.5" r="6.3" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M1.4 7.5h12.2M7.5 1.2c-3.2 3.4-3.2 9.2 0 12.6M7.5 1.2c3.2 3.4 3.2 9.2 0 12.6" fill="none" stroke="currentColor" stroke-width="1"/></svg>';
-    const sug = '<div class="mk-sug sg" style="left:' + ADDR_X + 'px;width:' + ADDR_W + 'px"><div class="hd">Top Hit</div><div class="r on">' + globe + '<span>' + esc(host) + '</span><small>— Go to site</small></div>' +
+    const sug = '<div class="mk-sug sg" style="' + box + '"><div class="hd">Top Hit</div><div class="r on">' + GL.globe + '<span>' + esc(host) + '</span></div>' +
       '<div class="hd" style="margin-top:4px">Suggestions</div><div class="r">' + GL.mag.replace('<svg', '<svg style="width:13px;height:13px;margin:0 1px"') + '<span>' + esc(host) + '</span></div></div>';
-    const key = '<div class="mk-key rk" style="' + at(SAF.x + ADDR_X + ADDR_W - 132, SAF.y + 178) + '">' + GL.returnkey + '<span>return</span></div>';
     const addr = '<div class="mk-addr a-ph tgt" style="' + box + '"><span class="ph">Search or enter website name</span></div>' +
       '<div class="mk-addr edit a-ed" style="' + box + '"><span class="ty">' + esc(host) + '</span><i class="caret"></i></div>' +
       addrIdle(host, 'a-go', '<i class="prog"></i>') + sug;
     const tl = {
       dur: 9000,
-      vis: [['.a-ph', [[0, 0.26]]], ['.a-ed', [[0.26, 0.62]]], ['.a-go', [[0.62, 1]]], ['.pg', [[0.7, 0.98]]], ['.rk', [[0.5, 0.68]], 'pop'], ['.caret', [[0.47, 0.62]]], ['.sg', [[0.47, 0.61]]]],
+      vis: [['.a-ph', [[0, 0.26]]], ['.a-ed', [[0.26, 0.62]]], ['.a-go', [[0.62, 1]]], ['.pg', [[0.68, 0.98]]], ['.caret', [[0.47, 0.62]]], ['.sg', [[0.47, 0.61]]]],
       type: [['.a-ed .ty', host, 0.3, 0.46, 0.62]],
-      anim: [['.rk', [{ offset: 0, transform: 'translateY(0)' }, { offset: 0.59, transform: 'translateY(0)' }, { offset: 0.6, transform: 'translateY(2px)' }, { offset: 0.63, transform: 'translateY(2px)' }, { offset: 0.64, transform: 'translateY(0)' }, { offset: 1, transform: 'translateY(0)' }]],
-        ['.prog', [{ offset: 0, transform: 'scaleX(0)', opacity: 1 }, { offset: 0.62, transform: 'scaleX(0)', opacity: 1, easing: 'cubic-bezier(.3,.6,.3,1)' }, { offset: 0.74, transform: 'scaleX(1)', opacity: 1 }, { offset: 0.77, transform: 'scaleX(1)', opacity: 0 }, { offset: 1, opacity: 0 }]]],
-      cursor: glide(0.04, 0.2, [300, 200], '.tgt', -40, 2).concat([[0.95, '.tgt', -40, 2]]),
-      cursorVis: [[0.04, 0.95]],
-      halo: [['.tgt', 0.14, 0.26]],
-      clicks: [[0.25, '.tgt', -40, 2]],
+      anim: [['.prog', [{ offset: 0, transform: 'scaleX(0)', opacity: 1 }, { offset: 0.62, transform: 'scaleX(0)', opacity: 1, easing: 'cubic-bezier(.3,.6,.3,1)' }, { offset: 0.72, transform: 'scaleX(1)', opacity: 1 }, { offset: 0.75, transform: 'scaleX(1)', opacity: 0 }, { offset: 1, opacity: 0 }]]],
+      // The tip rests in the empty left part of the field, clear of its
+      // placeholder. As on the Mac, the pointer hides once typing starts
+      // (until the mouse moves).
+      cursor: [[0.04, '.tgt', 40, 120, EASE], [0.18, '.tgt', -100, 3], [0.29, '.tgt', -100, 3]],
+      cursorVis: [[0.04, 0.29]],
+      halo: [['.tgt', 0.15, 0.25]],
+      clicks: [[0.25, '.tgt', -100, 3]],
     };
-    return { cam: CAM_SAF, layers: safariWin(o, { addr, page: pg }) + key, tl, poster: 0.56 };
-  };
-  V['safari-download'] = function (o) {
-    const tl = Object.assign({ dur: 6500 }, clickLoop(o, [340, 236], '.tgt', { click: 0.6, accent: true }));
-    tl.anim = tl.anim.concat([['.dlb', [{ offset: 0, opacity: 0 }, { offset: 0.62, opacity: 0 }, { offset: 0.66, opacity: 1 }, { offset: 0.97, opacity: 1 }, { offset: 1, opacity: 0 }]]]);
-    return { cam: camPage(200), layers: safariWin(o, { addr: addrIdle(o.host), page: page(o, 'dl', PAGE_TOP, true), dl: true }), tl, poster: 0.5 };
-  };
-  V['safari-open'] = function (o) {
-    const cam = { x: SAF.x + SAF.w - 513 + 10, y: SAF.y - 12, s: 0.78 };
-    const pop = '<div class="mk-pop2 pv" style="' + at(SAF.w - 12 - 330, 58) + '"><div class="hd">Downloads<span>Clear</span></div><div class="it tgt"><i class="mk-hl"></i><i class="ic">' + appIcon() + '</i><div><b>' + esc(o.appName) + '</b><span>8 MB</span></div><span class="mg">' + GL.mag + '</span></div></div>';
+    return { cam: CAM_SAF, layers: safariWin(o, { addr, page: pg }), tl, poster: 0.56 };
+  });
+
+  // The page's Download button; at the click the page turns to state B. The
+  // tip rests on the button's right part, clear of "Download" and of the
+  // wider "Download Again" that takes its place (the column moves down a
+  // little as the sentence grows), then steps out to the right.
+  def('safari-download', 'safari', function (o) {
+    const tl = clickLoop(o, '.tgt', { click: 0.5, accent: true, from: [150, 50], dx: 55, after: [75, -6] });
+    tl.vis = [['.pa', [[0, 0.5], [0.97, 1]]], ['.pb', [[0.5, 0.97]]], ['.dlb', [[0.52, 0.97]]]];
+    const pg = page(o, 'A', 'pa', true) + page(o, 'B', 'pb');
+    // Still (downloading): the page after the click.
+    return { cam: CAM_COL_A, layers: safariWin(o, { addr: addrIdle(o.host), page: pg, dl: true }), tl, poster: 0.42, still: 0.8 };
+  });
+
+  // Safari asks before the first download from a site (V8: verify the words).
+  def('safari-allow-dl', 'safari', function (o) {
+    const tl = clickLoop(o, '.tgt', { click: 0.5, accent: true, from: [120, 80] });
+    const sheet = safariSheet('Do you want to allow downloads on ' + q(esc(o.host)) + '?', ['You can change which websites can download files in Websites Settings.']);
+    return { cam: CAM_SAF, layers: safariWin(o, { addr: addrIdle(o.host), page: page(o, 'B'), dl: true, extra: sheet }), tl, poster: 0.42 };
+  });
+
+  // A size the way the Mac writes it (ByteCountFormatter, decimal): 660 KB, 1.2 MB.
+  const macSize = (b) => (b < 1e3 ? b + ' bytes' : b < 999.5e3 ? Math.round(b / 1e3) + ' KB' : (b / 1e6).toFixed(1).replace(/\.0$/, '') + ' MB');
+  // The Downloads button, then a double-click on the app in its list (the
+  // tip rests right of the name, so the name stays readable).
+  def('safari-open', 'safari', function (o) {
+    const size = o.appBytes ? macSize(o.appBytes) : esc(o.appSize);
+    const pop = '<div class="mk-pop2 pv" style="' + at(SAF.w - 12 - 330, 58) + '"><div class="hd">Downloads<span>Clear</span></div><div class="it tgt"><i class="mk-hl"></i><i class="ic">' + appIcon() + '</i><div><b>' + esc(o.appName) + '</b>' + (size ? '<span>' + size + '</span>' : '') + '</div><span class="mg">' + GL.mag + '</span></div></div>';
     const tl = {
-      dur: 7000,
-      vis: [['.pv', [[0.03, 0.8]], 'pop']],
-      cursor: glide(0.08, 0.36, [120, 230], '.tgt', -40, 0).concat([[0.94, '.tgt', -40, 0]]),
-      cursorVis: [[0.08, 0.94]],
-      halo: [['.tgt', 0.3, 0.6]],
-      clicks: [[0.6, '.tgt', -40, 0], [0.655, '.tgt', -40, 0]],
-      anim: [['.tgt .mk-hl', [{ offset: 0, opacity: 0 }, { offset: 0.6, opacity: 0 }, { offset: 0.605, opacity: 1 }, { offset: 0.8, opacity: 1 }, { offset: 0.81, opacity: 0 }, { offset: 1, opacity: 0 }]],
-        ['.tgt b, .tgt span', [{ offset: 0, color: 'var(--tx)' }, { offset: 0.6, color: 'var(--tx)' }, { offset: 0.605, color: '#fff' }, { offset: 0.8, color: '#fff' }, { offset: 0.81, color: 'var(--tx)' }, { offset: 1, color: 'var(--tx)' }]]],
+      dur: 8000,
+      vis: [['.pv', [[0.3, 0.95]], 'pop']],
+      cursor: [[0.04, '.dlb', -120, 110, EASE], [0.16, '.dlb'], [0.32, '.dlb', 0, 0, EASE], [0.46, '.tgt', 12, 0], [0.95, '.tgt', 12, 0]],
+      cursorVis: [[0.04, 0.95]],
+      halo: [['.dlb', 0.15, 0.27], ['.tgt', 0.48, 0.62]],
+      clicks: [[0.27, '.dlb'], [0.62, '.tgt', 12, 0], [0.665, '.tgt', 12, 0]],
+      anim: [press(o, '.dlb', 0.27),
+        ['.tgt .mk-hl', [{ offset: 0, opacity: 0 }, { offset: 0.62, opacity: 0 }, { offset: 0.625, opacity: 1 }, { offset: 0.9, opacity: 1 }, { offset: 0.91, opacity: 0 }, { offset: 1, opacity: 0 }]],
+        ['.tgt b, .tgt span', [{ offset: 0, color: 'var(--tx)' }, { offset: 0.62, color: 'var(--tx)' }, { offset: 0.625, color: '#fff' }, { offset: 0.9, color: '#fff' }, { offset: 0.91, color: 'var(--tx)' }, { offset: 1, color: 'var(--tx)' }]]],
     };
-    return { cam: Object.assign({ cls: 'sq' }, cam), layers: safariWin(o, { addr: addrIdle(o.host), page: page(o, 'after', PAGE_TOP), dl: true, extra: pop }), tl, poster: 0.5 };
-  };
-  // After the download: the page offers a button that opens Privacy & Security.
-  V['safari-settings'] = function (o) {
-    const tl = Object.assign({ dur: 6500 }, clickLoop(o, [340, 236], '.tgt', { click: 0.6, accent: true }));
-    return { cam: camPage(179), layers: safariWin(o, { addr: addrIdle(o.host), page: page(o, 'after', PAGE_TOP - SCROLL_AFTER, true), dl: true }), tl, poster: 0.5 };
-  };
-  // Safari asks before a page opens another app: a sheet over that page.
-  V['safari-allow'] = function (o) {
-    const sheet = alertBox({ x: SAF.w / 2 - 130, y: 52 + 26, cls: 'dlg', icon: safariIcon(), title: 'Do you want to allow this page to open “System Settings”?', row: true, buttons: [['Cancel', ''], ['Allow', 'def tgt']] });
-    const tl = Object.assign({ dur: 6500, vis: [['.dlg', [[0.03, 0.7]], 'pop'], ['.mk-dim', [[0.02, 0.72]]]] }, clickLoop(o, [120, 236], '.tgt', { click: 0.6, accent: true }));
-    return { cam: CAM_SAF, layers: safariWin(o, { addr: addrIdle(o.host), page: page(o, 'after', PAGE_TOP - SCROLL_AFTER), dl: true, extra: '<div class="mk-dim" style="top:52px"></div>' + sheet }), tl, poster: 0.5 };
-  };
+    return { cam: CAM_SAF, layers: safariWin(o, { addr: addrIdle(o.host), page: page(o, 'B'), dl: true, extra: pop }), tl, poster: 0.56 };
+  });
+
+  // The page after a blocked open: its button opens Privacy & Security.
+  def('safari-settings', 'safari', function (o) {
+    const tl = clickLoop(o, '.tgt', { click: 0.5, accent: true, from: [160, 40] });
+    return { cam: CAM_COL_C, layers: safariWin(o, { addr: addrIdle(o.host), page: page(o, 'C', '', true), dl: true }), tl, poster: 0.42 };
+  });
+
+  // Safari asks before the page opens System Settings.
+  def('safari-allow', 'safari', function (o) {
+    const tl = clickLoop(o, '.tgt', { click: 0.5, accent: true, from: [120, 80] });
+    const sheet = safariSheet('Do you want to allow this page to open “System Settings”?');
+    return { cam: CAM_SAF, layers: safariWin(o, { addr: addrIdle(o.host), page: page(o, 'C'), dl: true, extra: sheet }), tl, poster: 0.42 };
+  });
+
+  // ---- Alerts over Safari (family "alert") ----
+  // Safari's own camera: its inactive toolbar frames the alert, and the page's
+  // sentence and meta line are not drawn around it (macos.css, .fam-alert).
+  const CAM_AL = CAM_SAF;
+  const safariBehind = (o) => safariWin(o, { addr: addrIdle(o.host), page: page(o, 'B'), dl: true, off: true });
+
+  // Gatekeeper: "Not Opened". The highlighted button is Move to Trash; the one to click is Done.
+  def('gk-notopened', 'alert', function (o) {
+    const body = isDefault(o) ? 'Apple could not verify “USB-C<br>Display.app” is free of malware that<br>may harm your Mac or compromise<br>your privacy.' : 'Apple could not verify ' + q(appApp(o)) + ' is free of malware that may harm your Mac or compromise your privacy.';
+    const title = isDefault(o) ? q(appApp(o)) + '<br>Not Opened' : q(appApp(o)) + ' Not Opened';
+    const dlg = alertBox({ cls: 'dlg mat', icon: vaultIcon(), title, body: [body], help: true, buttons: [['Move to Trash', 'def'], ['Done', 'tgt']] });
+    const tl = clickLoop(o, '.tgt', { click: 0.5, from: [170, 30] });
+    return { cam: CAM_AL, layers: safariBehind(Object.assign({}, o, { notarized: false })) + centred(CAM_AL, dlg), tl, poster: 0.42 };
+  });
+
+  // A notarized app's first open (V7: verify the words).
+  def('gk-open', 'alert', function (o) {
+    const n = Object.assign({}, o, { notarized: true });
+    const dlg = alertBox({ cls: 'dlg mat', icon: appIcon(), title: q(appApp(o)) + ' is an app downloaded from the Internet. Are you sure you want to open it?',
+      body: ['Safari downloaded this file today at ' + timeOf(new Date()) + ' from ' + esc(o.host) + '.', 'Apple checked it for malicious software and none was detected.'],
+      buttons: [['Open', 'def tgt'], ['Cancel', '']] });
+    // Open has Cancel right below it: the tip rests beside its label.
+    const tl = clickLoop(o, '.tgt', { click: 0.5, accent: true, from: [170, 60], dx: 40, dy: 2 });
+    return { cam: CAM_AL, layers: safariBehind(n) + centred(CAM_AL, dlg), tl, poster: 0.42 };
+  });
+
+  // ---- System Settings (family "settings": one window, cameras from its top) ----
+  const WIN = { x: 280, y: 150 };
+  const CAM_SET = { x: 150, y: 140, s: 0.8 };
+  // Scrolled so the band's lower edge falls between the "was blocked" group
+  // and the FileVault group.
+  const SEC_SCROLL = 45;
+  const winSecurity = (o, off, cls, btn) => settingsWin({ x: WIN.x, y: WIN.y, sel: 'privacy', title: 'Privacy &amp; Security', edge: true, off, cls, pane: paneSecurity(o, { blocked: true, btn, scroll: SEC_SCROLL }) });
+
+  // Open Anyway, three parts on one camera (20 s): the pane's button; the
+  // confirmation; Touch ID or the password, then Modify Settings.
+  def('gk-anyway', 'settings', function (o) {
+    const confirm = alertBox({ cls: 'dlg-c', icon: vaultIcon(), title: 'Open ' + q(appApp(o)) + '?', help: true,
+      body: ['Apple is not able to verify that it is free from malware that could harm your Mac or compromise your privacy. Don’t open this unless you are certain it is from a trustworthy source.'],
+      buttons: [['Open Anyway', 'def t2'], ['Done', '']] });
+    const auth = authBox('dlg-a', 't3');
+    // The password dialog sits 15 pt lower, below the toolbar's title and the row under it.
+    const layers = winSecurity(o, true, 'w-off') + winSecurity(o, false, 'w-on', 't1') + centred(CAM_SET, confirm) + centred(CAM_SET, auth, 15);
+    const tl = {
+      dur: 20000,
+      vis: [['.w-on', [[0, 0.3], [0.975, 1]]], ['.dlg-c', [[0.31, 0.6]], 'pop'], ['.dlg-a', [[0.635, 0.955]], 'pop'], ['.pw .ph', [[0, 0.72]]], ['.fr', [[0.71, 0.955]]]],
+      type: [['.pw .dots', '••••••••', 0.725, 0.79, 0.955]],
+      // The tip rests under each label; Open Anyway has Done right below it, so
+      // there it rests beside its label. The pointer moves on as the
+      // confirmation closes, hides while the password is typed, and fades out
+      // with the password dialog.
+      cursor: [[0.03, '.t1', 120, 86, EASE], [0.12, '.t1', 0, 6], [0.3, '.t1', 0, 6, EASE], [0.4, '.t2', 40, 2], [0.57, '.t2', 40, 2, EASE], [0.69, '.pw', 40, 1], [0.79, '.pw', 40, 1, EASE], [0.85, '.t3', 0, 6], [0.95, '.t3', 0, 6]],
+      cursorVis: [[0.03, 0.73], [0.795, 0.95]],
+      halo: [['.t1', 0.13, 0.22], ['.t2', 0.42, 0.52], ['.t3', 0.86, 0.91]],
+      clicks: [[0.22, '.t1', 0, 6], [0.52, '.t2', 40, 2], [0.705, '.pw', 40, 1], [0.91, '.t3', 0, 6]],
+      anim: [press(o, '.t1', 0.22), press(o, '.t2', 0.52, true), press(o, '.t3', 0.91, true)],
+    };
+    return { cam: CAM_SET, layers, tl, poster: 0.18 };
+  });
+
+  // Privacy lists: the pointer turns on the app's switch. off: the switch
+  // stays off and there's no pointer.
+  function listScene(o, title, pane, sel, edge) {
+    const layers = settingsWin({ x: WIN.x, y: WIN.y, sel, title, pane, edge });
+    if (o.off) return { cam: CAM_SET, layers, tl: { dur: 1000 }, poster: 0 };
+    const tl = clickLoop(o, '.tgt', { click: 0.5, from: [-150, -60], dur: 7000, dy: 0 });
+    tl.anim = tl.anim.concat(switchOn('.tgt', 0.505, 0.95));
+    return { cam: CAM_SET, layers, tl, poster: 0.44 };
+  }
+  def('screen-list', 'settings', (o) => listScene(o, 'Screen &amp; System Audio Recording', paneScreen(o, false, !o.off), 'privacy'));
+  def('ax-list', 'settings', (o) => listScene(o, 'Device Control and Data Access', paneAx(o, false, !o.off), 'privacy'));
+  def('login-list', 'settings', (o) => listScene(o, 'Login Items', paneLogin(o, false, !o.off), '', true));
+
+  // After the switch: macOS asks to quit and reopen the app.
+  def('screen-reopen', 'settings', function (o) {
+    const msg = q(appApp(o)) + ' may not be able to record the contents of your screen until it is quit.';
+    const dlg = alertBox({ cls: 'dlg mat', icon: appIcon(), title: msg, body: ['You can choose to quit ' + q(appApp(o)) + ' now, or do it on your own later.'],
+      row: true, buttons: [['Later', ''], ['Quit &amp; Reopen', 'def tgt']] });
+    const tl = clickLoop(o, '.tgt', { click: 0.5, accent: true, from: [150, 70] });
+    // The alert sits just under the toolbar; the pane's header and description
+    // behind it aren't drawn, so no scrap of them sticks out beside it.
+    return { cam: CAM_SET, layers: settingsWin({ x: WIN.x, y: WIN.y, sel: 'privacy', title: 'Screen &amp; System Audio Recording', off: true, cls: 'under', pane: paneScreen(o, true) }) + centred(CAM_SET, dlg, 10), tl, poster: 0.42 };
+  });
+
+  // ---- Permission prompts (family "prompt"): the prompt in the middle of
+  // the screen, an inactive System Settings window behind it ----
+  const CAM_PR = { x: 311.6, y: 173.3, s: 0.9 };
+  // The window sits so the sidebar's names end clear of the prompt's left edge.
+  const WIN_PR = { x: 380, y: 205 };
+  // Privacy & Security scrolled so the rows beside the prompt show no words
+  // (only their chevrons and "On"), and Security with "Allow applications
+  // from" sits whole below it; the band's edge falls above FileVault.
+  const PR_SCROLL = 95;
+  function promptScene(o, title, badge, msg, behind) {
+    const pr = prompt({ cls: 'dlg mat', title, badge, msg });
+    const tl = clickLoop(o, '.tgt', { click: 0.5, from: [170, 70] });
+    return { cam: CAM_PR, layers: behind + centred(CAM_PR, pr), tl, poster: 0.42 };
+  }
+  def('screen-prompt', 'prompt', (o) => promptScene(o, 'Screen Recording', 'record',
+    isDefault(o) ? q(appApp(o)) + ' would like to record this<br>computer’s screen and audio.' : q(appApp(o)) + ' would like to record this computer’s screen and audio.',
+    settingsWin({ x: WIN_PR.x, y: WIN_PR.y, sel: 'privacy', title: 'Privacy &amp; Security', edge: true, off: true, pane: paneSecurity(o, { scroll: PR_SCROLL }) })));
+  def('ax-prompt', 'prompt', (o) => promptScene(o, 'Device Control and Data Access', 'folder',
+    isDefault(o) ? q(appApp(o)) + ' would like to control this Mac<br>and access your data.' : q(appApp(o)) + ' would like to control this Mac and access your data.',
+    settingsWin({ x: WIN_PR.x, y: WIN_PR.y, sel: 'privacy', title: 'Screen &amp; System Audio Recording', off: true, cls: 'under', pane: paneScreen(o, true) })));
+
+  // ---- The "Login Item Added" notification (family "banner") ----
+  const CAM_BN = { x: SCREEN.w - CANVAS.w / 0.9, y: 0, s: 0.9 };
+  const WIN_BN = { x: 700, y: 140 };
+  // Privacy & Security scrolled so Analytics & Improvements sits wholly under
+  // the toolbar, and the band's lower edge falls below the Security header.
+  const BN_SCROLL = 30;
+  def('bg-items', 'banner', function (o) {
+    const note = '<div class="mk-note-b nt" style="' + at(SCREEN.w - 12 - 344, 44) + '"><i class="ic">' + settingsIcon() + '</i><div class="bd"><b>Login Item Added</b><p>' + q(esc(o.appName)) + ' can run in the background. You can manage this in Login Items &amp; Extensions.</p></div><span class="tm">now</span></div>';
+    const win = settingsWin({ x: WIN_BN.x, y: WIN_BN.y, sel: 'privacy', title: 'Privacy &amp; Security', edge: true, pane: paneSecurity(o, { scroll: BN_SCROLL }) });
+    const tl = { dur: 7000, vis: [['.nt', [[0.06, 0.9]], 'slideL']] };
+    return { cam: CAM_BN, layers: win + menubar() + note, tl, poster: 0.5 };
+  });
 
   // ---------- Builder ----------
   function norm(opt) {
     opt = opt || {};
+    const acc = String(opt.accent || '').toLowerCase();
     return {
       dark: opt.dark !== false,
-      accent: ACCENTS.indexOf(opt.accent) >= 0 ? opt.accent : 'purple',
-      host: String(opt.host || 'usbc.local').replace(/^https?:\/\//, '').replace(/\/$/, ''),
+      accent: ACCENTS.indexOf(acc) >= 0 ? acc : 'blue',
+      host: String(opt.host || 'usbc.local').replace(/^[a-z]+:\/\//i, '').replace(/\/.*$/, '') || 'usbc.local',
       appName: String(opt.appName || 'USB-C Display'),
+      appSize: String(opt.appSize || ''),
+      appBytes: Math.max(0, Math.round(+opt.appBytes || 0)),
+      appVersion: String(opt.appVersion || '5'),
+      notarized: !!opt.notarized,
+      still: !!opt.still,
+      off: !!opt.off,
     };
   }
+  const r1 = (v) => Math.round(v * 10) / 10;
 
-  D.scenes = D.scenes || {};
   D.scenes.mac = function (name, opt) {
     const o = norm(opt);
-    const v = (V[name] || V['gk-notopened'])(o);
-    const cam = v.cam;
-    const s = cam.s;
-    const html = '<div class="mk ' + (o.dark ? 'dark' : 'light') + ' acc-' + o.accent + (cam.cls ? ' ' + cam.cls : '') + '" data-mac="' + esc(name) + '">' +
-      '<div class="mk-scr" style="width:' + SCREEN.w + 'px;height:' + SCREEN.h + 'px;transform:scale(' + s + ') translate(' + px(-cam.x) + ',' + px(-cam.y) + ')"><div class="mk-wall"></div>' + v.layers + '</div>' +
-      (cam.noCursor ? '' : pointer(Math.min(1.2, s * 1.2))) + '</div>' +
-      '<div class="mlabel mac">' + D.icon('mac') + 'On your Mac</div>';
-    return { key: 'mac:' + name + ':' + (o.dark ? 'd' : 'l') + o.accent + ':' + o.host + ':' + o.appName, html, tl: v.tl, poster: v.poster, crop: false };
+    const known = !!V[name];
+    // An unknown name shows the empty desktop, never a wrong instruction.
+    const v = known ? V[name](o) : { cam: CAM_SAF, layers: '', tl: { dur: 1000 }, poster: 0 };
+    const cam = { x: r1(v.cam.x), y: r1(v.cam.y), s: v.cam.s };
+    const frozen = o.still || o.off || !known;
+    let tl = Object.assign({}, v.tl);
+    let poster = v.poster;
+    if (frozen) {
+      poster = o.still && v.still != null ? v.still : poster;
+      // A still picture: what the screen looks like at that moment, without
+      // the pointer, its highlight or its clicks.
+      delete tl.cursor; delete tl.cursorVis; delete tl.halo; delete tl.clicks;
+      tl.stillAt = poster;
+    }
+    tl.w = CANVAS.w; tl.h = CANVAS.h; tl.poster = poster; tl.cam = cam;
+    const cls = 'mk ' + (o.dark ? 'dark' : 'light') + ' acc-' + o.accent + ' fam-' + (FAMILY[name] || 'none') + (frozen ? ' still' : '') + (o.off ? ' off-state' : '');
+    const html = '<div class="' + cls + '" data-mac="' + esc(name) + '">' +
+      '<div class="mk-scr" style="width:' + SCREEN.w + 'px;height:' + SCREEN.h + 'px;transform:' + camT(cam) + '"><div class="mk-wall"></div>' + v.layers + '</div>' +
+      (frozen || !tl.cursor ? '' : pointer(cam.s * 1.15)) + '</div>';
+    const key = 'mac:' + name + ':' + (o.dark ? 'd' : 'l') + ':' + o.accent + ':' + o.host + ':' + o.appName + ':' + o.appSize + ':' + o.appBytes + ':' + o.appVersion +
+      ':' + (o.notarized ? 'n' : '') + (o.still ? 's' : '') + (o.off ? 'o' : '');
+    return { key, html, tl, poster, cam, family: FAMILY[name] || 'none', w: CANVAS.w, h: CANVAS.h };
   };
-  // For the preview page: the list of variants.
+  // For the preview pages: every scene and its family.
   D.scenes.mac.names = Object.keys(V);
+  D.scenes.mac.families = Object.assign({}, FAMILY);
 })();

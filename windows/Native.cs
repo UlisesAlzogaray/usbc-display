@@ -79,6 +79,26 @@ static unsafe class Win32
     [DllImport("user32.dll")] public static extern int DestroyWindow(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern int ShowWindow(IntPtr hwnd, int cmd);
     [DllImport("user32.dll")] public static extern int SetForegroundWindow(IntPtr hwnd);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, IntPtr pid);
+    [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] static extern int AttachThreadInput(uint attach, uint to, int on);
+    [DllImport("user32.dll")] static extern int BringWindowToTop(IntPtr hwnd);
+
+    // In front, with the keyboard. Windows refuses SetForegroundWindow to a process started in
+    // the background (the watcher starts the display on a plug, with no click on this PC), so the
+    // window then joins the foreground window's input for a moment. Returns whether it's in front.
+    public static bool TakeForeground(IntPtr hwnd)
+    {
+        SetForegroundWindow(hwnd);
+        IntPtr fg = GetForegroundWindow();
+        if (fg == hwnd) return true;
+        uint them = fg == 0 ? 0 : GetWindowThreadProcessId(fg, 0), me = GetCurrentThreadId();
+        if (them == 0 || them == me || AttachThreadInput(me, them, 1) == 0) return false;
+        BringWindowToTop(hwnd);
+        SetForegroundWindow(hwnd);
+        AttachThreadInput(me, them, 0);
+        return GetForegroundWindow() == hwnd;
+    }
     [DllImport("user32.dll")] public static extern IntPtr SetCursor(IntPtr cursor);
     [DllImport("user32.dll")] public static extern int SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern IntPtr CreateIconIndirect(ICONINFO* info);

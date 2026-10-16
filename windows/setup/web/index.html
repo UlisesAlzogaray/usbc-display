@@ -1,191 +1,244 @@
 <!doctype html>
-<html lang="en" data-has-app="{{HAS_APP}}" data-notarized="{{NOTARIZED}}">
+<html lang="en" data-has-app="{{HAS_APP}}" data-notarized="{{NOTARIZED}}" data-version="{{VERSION}}" data-state="a">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>USB-C Display</title>
-<link rel="icon" href="/icon.png">
-<link rel="apple-touch-icon" href="/icon.png">
+<link rel="icon" href="icon.png">
+<!-- The page Safari shows on the Mac at http://usbc.local (SPEC §8). It comes from this PC
+     through the cable. It renders in Safari, so it uses the Mac's own font (-apple-system) and
+     the Mac's accent colour (AccentColor). States: a (loaded), b (after Download), c (allow it in
+     Privacy & Security, un-notarized only), d (this copy has no app for Mac). macos.js page()
+     draws the same page for the pictures, so every length here is an explicit px value.
+     Preview only: ?state=a|b|c|d shows a state directly. -->
 <style>
   :root {
     color-scheme: light dark;
-    --bg: #f5f5f7;
-    --card: #ffffff;
-    --text: #1d1d1f;
-    --muted: #6e6e73;
-    --line: rgba(0, 0, 0, 0.08);
-    --blue: #0071e3;
-    --blue-hover: #0077ed;
-    --soft: #f0f6ff;
-    --green: #1d9a4e;
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 12px 40px rgba(0, 0, 0, 0.08);
+    --bg: #FFFFFF;
+    --label: rgba(0, 0, 0, .847);
+    --label-2: rgba(0, 0, 0, .498);
+    --label-3: rgba(0, 0, 0, .259);
+    --btn-2: rgba(0, 0, 0, .06);
+    --accent: AccentColor;
+    --on-accent: #FFFFFF;
+  }
+  @supports not (color: AccentColor) {
+    :root { --accent: #007AFF; }
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #000000;
-      --card: #1c1c1e;
-      --text: #f5f5f7;
-      --muted: #a1a1a6;
-      --line: rgba(255, 255, 255, 0.1);
-      --blue: #0a84ff;
-      --blue-hover: #409cff;
-      --soft: rgba(10, 132, 255, 0.12);
-      --green: #32d74b;
-      --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 40px rgba(0, 0, 0, 0.5);
+      --bg: #1E1E1E;
+      --label: rgba(255, 255, 255, .847);
+      --label-2: rgba(255, 255, 255, .549);
+      --label-3: rgba(255, 255, 255, .247);
+      --btn-2: rgba(255, 255, 255, .1);
     }
   }
+  html[data-accent="yellow"] { --on-accent: #1D1D1F; }
+
   * { box-sizing: border-box; }
-  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  [hidden] { display: none !important; }
+  html { background: var(--bg); }
   body {
-    font: 17px/1.47 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
-    -webkit-font-smoothing: antialiased;
+    margin: 0;
     min-height: 100vh;
+    padding: 32px 16px;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 40px 16px;
-  }
-  main {
-    width: 100%;
-    max-width: 560px;
-    background: var(--card);
-    border-radius: 22px;
-    box-shadow: var(--shadow);
-    padding: 44px 44px 36px;
+    background: var(--bg);
+    color: var(--label);
+    font-family: -apple-system, BlinkMacSystemFont, system-ui, "Helvetica Neue", sans-serif;
+    font-size: 17px;
+    line-height: 22px;
     text-align: center;
+    -webkit-text-size-adjust: 100%;
+    cursor: default;
   }
-  .icon { width: 112px; height: 112px; display: block; margin: 0 auto 18px; }
-  h1 { font-size: 32px; line-height: 1.15; letter-spacing: -0.02em; margin: 0 0 10px; font-weight: 700; }
-  .lead { color: var(--muted); margin: 0 auto 28px; max-width: 420px; }
+  main { width: 440px; max-width: 100%; }
 
-  .path {
-    display: flex; align-items: center; justify-content: center; gap: 12px;
-    margin: 0 auto 30px; color: var(--muted); font-size: 13px;
+  .icon { display: block; width: 128px; height: 128px; margin: 0 auto; -webkit-user-drag: none; -webkit-user-select: none; user-select: none; }
+  h1 { margin: 16px 0 0; font-size: 26px; line-height: 32px; font-weight: 700; letter-spacing: -0.01em; color: var(--label); }
+  .line { margin: 6px 0 0; font-size: 17px; line-height: 22px; font-weight: 400; color: var(--label-2); }
+  .line b { font-weight: 600; }
+  /* A name is never split across two lines (“USB-C Display”, “Move to Trash”). */
+  .nw { white-space: nowrap; }
+  html[data-notarized="true"] .un { display: none; }
+
+  .act { margin-top: 28px; display: flex; flex-direction: column; align-items: center; }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 36px;
+    min-width: 180px;
+    padding: 0 20px;
+    border-radius: 18px;
+    font-size: 13px;
+    line-height: 16px;
+    font-weight: 400;
+    white-space: nowrap;
+    text-decoration: none;
+    cursor: default;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-user-drag: none;
   }
-  .path figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; }
-  .path svg { display: block; }
-  .wire { position: relative; width: 110px; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; margin-bottom: 20px; }
-  .wire::after {
-    content: ""; position: absolute; top: 0; left: -30%; width: 30%; height: 100%;
-    border-radius: 2px; background: var(--blue);
-    animation: flow 1.6s ease-in-out infinite;
-  }
-  @keyframes flow { to { left: 100%; } }
+  .btn.primary { background-color: var(--accent); color: var(--on-accent); }
+  .btn.secondary { background-color: var(--btn-2); color: var(--label); }
+  /* Pressed: 10 % darker, at once. No hover effect. */
+  .btn:active { background-image: linear-gradient(rgba(0, 0, 0, .1), rgba(0, 0, 0, .1)); }
+  .note { margin: 12px 0 0; font-size: 13px; line-height: 16px; color: var(--label-2); }
+  .note + .btn { margin-top: 12px; }
+  .meta { margin: 10px 0 0; font-size: 13px; line-height: 16px; color: var(--label-2); }
 
-  .download {
-    display: inline-flex; align-items: center; justify-content: center; gap: 10px;
-    min-width: 300px; padding: 16px 30px;
-    font: inherit; font-size: 19px; font-weight: 600; color: #fff; text-decoration: none;
-    background: var(--blue); border-radius: 980px; border: 0; cursor: pointer;
-    transition: background 0.15s, transform 0.1s;
-  }
-  .download:hover { background: var(--blue-hover); }
-  .download:active { transform: scale(0.98); }
-  .download:focus-visible { outline: 3px solid var(--soft); outline-offset: 3px; }
-  .meta { color: var(--muted); font-size: 14px; margin: 12px 0 0; }
-
-  .next { display: none; text-align: left; margin: 30px 0 0; padding: 22px 24px; border-radius: 16px; background: var(--soft); }
-  .next.show { display: block; animation: rise 0.35s ease-out; }
-  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
-  .next h2 { font-size: 19px; margin: 0 0 10px; }
-  .next ol { margin: 0; padding-left: 22px; }
-  .next li { margin: 6px 0; }
-  .next .laptop { font-weight: 600; }
-
-  /* After the download the Download button steps back, and (when the app isn't notarized) the
-     way to Open Anyway comes forward. */
-  .download.again { background: transparent; color: var(--blue); box-shadow: inset 0 0 0 2px var(--blue); min-width: 0; padding: 10px 22px; font-size: 16px; }
-  .unblock { display: none; text-align: left; margin: 18px 0 0; padding: 22px 24px; border-radius: 16px; background: var(--soft); }
-  html[data-notarized="false"] .unblock.show { display: block; animation: rise 0.35s ease-out; }
-  .unblock h2 { font-size: 19px; margin: 0 0 8px; }
-  .unblock p { margin: 0 0 14px; }
-  .unblock .download { min-width: 0; width: 100%; font-size: 17px; padding: 14px 24px; }
-  .unblock .meta { margin: 10px 0 0; text-align: center; }
-
-  .missing { display: none; color: var(--muted); }
-  html[data-has-app="false"] .missing { display: block; }
-  html[data-has-app="false"] .offer { display: none; }
-  .not-notarized { display: none; }
-  html[data-notarized="false"] .not-notarized { display: list-item; }
-  html[data-notarized="false"] .notarized { display: none; }
-
-  .about { border-top: 1px solid var(--line); margin-top: 30px; padding-top: 18px; color: var(--muted); font-size: 13px; }
-  .about p { margin: 0; }
-  @media (max-width: 520px) {
-    main { padding: 32px 22px 28px; }
-    .download { min-width: 0; width: 100%; }
-    .wire { width: 60px; }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .wire::after { animation: none; left: 35%; }
-    .next.show { animation: none; }
-  }
+  /* V2: shown only if Safari turns out to say "Not Secure" for this page. */
+  .foot { position: fixed; left: 16px; right: 16px; bottom: 32px; margin: 0; font-size: 12px; line-height: 15px; color: var(--label-3); }
 </style>
 </head>
 <body>
 <main>
-  <img class="icon" src="/icon.png" alt="">
+  <img class="icon" src="icon.png" width="128" height="128" alt="">
   <h1>USB-C Display</h1>
-  <p class="lead">Use your laptop as a second screen for this Mac.</p>
 
-  <div class="path" aria-hidden="true">
-    <figure>
-      <svg width="64" height="44" viewBox="0 0 64 44"><rect x="8" y="3" width="48" height="31" rx="3" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M2 38h60l-3 4H5z" fill="currentColor"/></svg>
-      <figcaption>Your laptop</figcaption>
-    </figure>
-    <div class="wire"></div>
-    <figure>
-      <svg width="64" height="44" viewBox="0 0 64 44"><rect x="8" y="3" width="48" height="31" rx="3" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M2 38h60l-3 4H5z" fill="currentColor"/><circle cx="32" cy="6" r="1" fill="currentColor"/></svg>
-      <figcaption>This Mac</figcaption>
-    </figure>
+  <p class="line st a">Use your Windows PC as a display for this Mac.</p>
+  <p class="line st b" hidden>Open USB-C Display from Safari’s Downloads.<span class="un"> When your Mac says it can’t verify the app, click <b>Done</b>, not <span class="nw">Move to Trash</span>.</span></p>
+  <p class="line st c" hidden>To open USB-C Display, allow it in Privacy &amp; Security.</p>
+  <p class="line st d" hidden>This copy of USB-C Display Setup doesn’t include <span class="nw">USB-C Display</span> for Mac. Download <span class="nw">USB-C Display Setup</span> again on your PC.</p>
+
+  <div class="act st a">
+    <a class="btn primary" data-do="download" href="/USB-C-Display.zip" download="USB-C-Display.zip">Download</a>
+  </div>
+  <div class="act st b" hidden>
+    <a class="btn secondary" data-do="download" href="/USB-C-Display.zip" download="USB-C-Display.zip">Download Again</a>
+  </div>
+  <div class="act st c" hidden>
+    <a class="btn primary" data-do="settings" href="x-apple.systempreferences:com.apple.preference.security?Security">Open Privacy &amp; Security</a>
+    <p class="note">If you clicked Move to Trash, click Download Again.</p>
+    <a class="btn secondary" data-do="download" href="/USB-C-Display.zip" download="USB-C-Display.zip">Download Again</a>
   </div>
 
-  <div class="offer">
-    <a class="download" id="download" href="/USB-C-Display.zip" download="USB-C-Display.zip">
-      <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2v11m0 0l-4.5-4.5M10 13l4.5-4.5M3 17h14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      Download USB-C Display
-    </a>
-    <p class="meta">For Mac &middot; {{SIZE}}<br>This file comes from your laptop, through the cable. Not from the internet.</p>
-
-    <section class="next" id="next" aria-live="polite">
-      <h2>While it downloads</h2>
-      <ol>
-        <li>If Safari asks whether to allow downloads, click <b>Allow</b>.</li>
-        <li class="notarized">Open <b>USB-C Display</b> from your Downloads. When your Mac asks if you're sure, click <b>Open</b>.</li>
-        <li class="not-notarized">Open <b>USB-C Display</b> from your Downloads. If your Mac says it can't check the app, click <b>Done</b>, not Move to Trash. Your laptop shows you how to open it.</li>
-        <li class="laptop">Then come back to your laptop. It shows you every next step.</li>
-      </ol>
-    </section>
-
-    <section class="unblock" id="unblock" aria-live="polite">
-      <h2>Your Mac said it can’t check the app?</h2>
-      <p>Click <b>Done</b> in that box, then click below. In the window that opens, click <b>Open Anyway</b>.</p>
-      <a class="download" id="settings" href="x-apple.systempreferences:com.apple.preference.security?Security">Open Privacy &amp; Security</a>
-      <p class="meta">If Safari asks to open System Settings, click <b>Allow</b>.</p>
-    </section>
-  </div>
-
-  <p class="missing">This copy of USB-C Display Setup doesn't include the Mac app. Get a complete copy of the setup on your laptop, then come back to this page.</p>
-
-  <div class="about">
-    <p>Safari may say "Not Secure" in the address bar. That's expected: this page comes straight from your laptop over the cable and never touches the internet.</p>
-  </div>
+  <p class="meta st a b">{{SIZE}} · Comes from your PC through the cable, not from the internet.</p>
 </main>
+<p class="foot" hidden>Safari shows “Not Secure” because this page comes from your PC through the cable, not from a website.</p>
+<i id="accent-probe" hidden></i>
 <script>
-  // Tells the laptop where you are (Safari in front or not, the settings button clicked), so it
-  // can show the matching step. Just that word, to the laptop, over the cable.
-  function report(e) {
-    try { fetch('/event?e=' + e, { cache: 'no-store', keepalive: true }); } catch (x) { /* fine */ }
+(function () {
+  'use strict';
+  var root = document.documentElement;
+  var notarized = root.getAttribute('data-notarized') === 'true';
+  var hasApp = root.getAttribute('data-has-app') !== 'false';
+
+  // One word to this PC (and, for "look", the Mac's appearance and accent), over the cable.
+  function report(q) {
+    try { fetch('/event?e=' + q, { cache: 'no-store', keepalive: true }).catch(function () {}); } catch (x) { /* nothing to do */ }
   }
-  window.addEventListener('focus', function () { report('focus'); });
-  window.addEventListener('blur', function () { report('blur'); });
-  document.getElementById('settings').addEventListener('click', function () { report('settings'); });
-  document.getElementById('download').addEventListener('click', function () {
-    document.getElementById('next').classList.add('show');
-    document.getElementById('unblock').classList.add('show');
-    this.classList.add('again');
-    this.lastChild.textContent = ' Download again';
+
+  // ---------- States ----------
+  var state = '';
+  function show(s) {
+    state = s;
+    root.setAttribute('data-state', s);
+    var els = document.querySelectorAll('.st');
+    for (var i = 0; i < els.length; i++) els[i].hidden = !els[i].classList.contains(s);
+  }
+
+  // State c (un-notarized only) follows the page's focus: after the Download click, Safari loses
+  // the focus to the Mac's "Not Opened" alert and gets it back when the alert closes. A blur in
+  // the first 1.5 s after the click (Safari's own allow-downloads question) doesn't count.
+  // Fallback: 20 s after the click.
+  var clickedAt = 0, blurredAt = 0, timer = 0;
+  function downloaded() {
+    report('download');
+    show('b');
+    clickedAt = Date.now();
+    blurredAt = 0;
+    clearTimeout(timer);
+    if (!notarized) timer = setTimeout(function () { if (state === 'b') show('c'); }, 20000);
+  }
+  function toC() { clearTimeout(timer); show('c'); }
+
+  var acts = document.querySelectorAll('[data-do]');
+  for (var i = 0; i < acts.length; i++) {
+    acts[i].addEventListener('click', function () {
+      if (this.getAttribute('data-do') === 'download') downloaded(); else report('settings');
+    });
+  }
+  window.addEventListener('blur', function () {
+    report('blur');
+    if (state === 'b' && Date.now() - clickedAt >= 1500) blurredAt = Date.now();
   });
+  window.addEventListener('focus', function () {
+    report('focus');
+    if (state === 'b' && !notarized && blurredAt) toC();
+    look(false);
+  });
+
+  // ---------- Look: the Mac's appearance and accent ----------
+  // The accent is the nearest of the eight macOS accents (BRIEF §2.3, --accent for this scheme)
+  // to the colour Safari resolves AccentColor to. WebKit on macOS 27.0.1 resolves AccentColor to
+  // the default blue whatever the Mac's accent is (measured with Purple, V17), so that colour, or
+  // no AccentColor at all, says nothing: the page then sends accent= empty (unknown) and the
+  // accent comes from the Mac app later.
+  var ACCENTS = {
+    light: { blue: '#007AFF', purple: '#953D96', pink: '#F74F9E', red: '#E0383E', orange: '#F7821B', yellow: '#FFC726', green: '#62BA46', graphite: '#989898' },
+    dark: { blue: '#007AFF', purple: '#A550A7', pink: '#F74F9E', red: '#FF5257', orange: '#F7821B', yellow: '#FFC600', green: '#62BA46', graphite: '#8C8C8C' }
+  };
+  var mq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+
+  function hex(h) { return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]; }
+  // A computed colour as sRGB 0-255: rgb()/rgba(), or color(srgb|display-p3 …) as Safari may give.
+  function parse(c) {
+    var m = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/.exec(c);
+    if (m) return [+m[1], +m[2], +m[3]];
+    m = /^color\(\s*(srgb|display-p3)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/.exec(c);
+    if (!m) return null;
+    var v = [+m[2], +m[3], +m[4]];
+    if (m[1] === 'display-p3') {
+      var lin = v.map(function (x) { return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4); });
+      var s = [
+        1.2249401 * lin[0] - 0.2249404 * lin[1],
+        -0.0420569 * lin[0] + 1.0420571 * lin[1],
+        -0.0196376 * lin[0] - 0.0786361 * lin[1] + 1.0982735 * lin[2]
+      ];
+      v = s.map(function (x) { x = Math.max(0, Math.min(1, x)); return x <= 0.0031308 ? 12.92 * x : 1.055 * Math.pow(x, 1 / 2.4) - 0.055; });
+    }
+    return v.map(function (x) { return x * 255; });
+  }
+  function accentName(dark) {
+    if (!(window.CSS && CSS.supports && CSS.supports('color', 'AccentColor'))) return '';
+    var probe = document.getElementById('accent-probe');
+    probe.style.color = 'AccentColor';
+    var rgb = parse(getComputedStyle(probe).color);
+    if (!rgb) return '';
+    if (Math.abs(rgb[0] - 0) <= 2 && Math.abs(rgb[1] - 122) <= 2 && Math.abs(rgb[2] - 255) <= 2) return '';  // WebKit's default
+    var table = ACCENTS[dark ? 'dark' : 'light'], best = 'blue', bestD = Infinity;
+    for (var name in table) {
+      var a = hex(table[name]);
+      var d = Math.pow(a[0] - rgb[0], 2) + Math.pow(a[1] - rgb[1], 2) + Math.pow(a[2] - rgb[2], 2);
+      if (d < bestD) { bestD = d; best = name; }
+    }
+    return best;
+  }
+  var lookSent = '';
+  function look(always) {
+    var dark = !!(mq && mq.matches);
+    var accent = accentName(dark);
+    root.setAttribute('data-accent', accent);
+    var q = 'look&dark=' + (dark ? 1 : 0) + '&accent=' + accent;
+    if (always || q !== lookSent) { lookSent = q; report(q); }
+  }
+  if (mq) {
+    if (mq.addEventListener) mq.addEventListener('change', function () { look(true); });
+    else if (mq.addListener) mq.addListener(function () { look(true); });
+  }
+
+  // ---------- Start ----------
+  var forced = /[?&]state=([abcd])\b/.exec(location.search);
+  show(forced ? forced[1] : hasApp ? 'a' : 'd');
+  look(true);
+})();
 </script>
 </body>
 </html>

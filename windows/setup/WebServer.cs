@@ -28,6 +28,11 @@ sealed class WebServer
 
     public bool Running { get { lock (gate) return listeners.Count > 0; } }
 
+    // The last try to listen found port 80 taken by another program (http.sys, IIS, another web
+    // server) on an address it wanted: server.error = "port".
+    public bool PortBusy { get { lock (gate) return portBusy; } }
+    bool portBusy;
+
     // Listens on the cable's addresses, keeping what already listens and adding what's missing.
     // Returns false if nothing could be bound (port 80 taken, address not ready yet).
     public bool Start(CableInfo cable)
@@ -40,6 +45,7 @@ sealed class WebServer
             if (cable.LaptopV4 != null) want.Add(cable.LaptopV4);
             foreach (var a in new List<IPAddress>(listeners.Keys))
                 if (!want.Contains(a)) { try { listeners[a].Stop(); } catch { } listeners.Remove(a); }
+            bool busy = false;
             foreach (var a in want)
             {
                 if (listeners.ContainsKey(a)) continue;
@@ -52,8 +58,14 @@ sealed class WebServer
                     _ = AcceptLoop(l, stop.Token);
                     Log.Write($"web: listening on {a}:80");
                 }
+                catch (SocketException e) when (e.SocketErrorCode is SocketError.AddressAlreadyInUse or SocketError.AccessDenied)
+                {
+                    busy = true;
+                    Log.Write($"web: can't listen on {a}:80, another program uses the port: {e.Message}");
+                }
                 catch (Exception e) { Log.Write($"web: can't listen on {a}:80: {e.Message}"); }
             }
+            portBusy = busy;
             // What actually listens: a mismatch with KeyFor means try again.
             BoundTo = $"{(cable.LaptopV6 != null && listeners.ContainsKey(cable.LaptopV6) ? cable.LaptopV6 : null)}," +
                       $"{(cable.LaptopV4 != null && listeners.ContainsKey(cable.LaptopV4) ? cable.LaptopV4 : null)}";
@@ -70,6 +82,7 @@ sealed class WebServer
         foreach (var l in listeners.Values) try { l.Stop(); } catch { }
         listeners.Clear();
         BoundTo = "";
+        portBusy = false;
     }
 
     async Task AcceptLoop(TcpListener l, CancellationToken ct)
@@ -196,14 +209,34 @@ sealed class WebServer
                 return SendZip(s, head_, keepAlive);
             case "/event":
                 // The page in Safari says where the person is (Safari in front or not, the
-                // settings button clicked), so the laptop can show the matching step. One word.
-                string e = query.StartsWith("?e=") ? query[3..] : "";
-                if (e is "focus" or "blur" or "settings") wizard.OnPageEvent(e);
-                Send(s, 204, "No Content", "text/plain; charset=utf-8", Array.Empty<byte>(), head_, "Cache-Control: no-store\r\n", keepAlive);
+                // Download and Privacy & Security buttons clicked, the Mac's look), and the Mac
+                // app may say it was opened, so this PC can show the matching step.
+                // e=<word> plus &k=v pairs; anything unknown is ignored.
+                var args = ParseQuery(query);
+                if (!head_ && args.TryGetValue("e", out string e) && e is "focus" or "blur" or "settings" or "download" or "look" or "opened")
+                    wizard.OnPageEvent(e, args);
+                Send(s, 204, "No Content", "text/plain; charset=utf-8", Array.Empty<byte>(), head_, null, keepAlive);
                 return keepAlive;
         }
         Send(s, 404, "Not Found", "text/plain; charset=utf-8", Encoding.UTF8.GetBytes("Not found\n"), head_, null, keepAlive);
         return keepAlive;
+    }
+
+    // "?e=look&dark=1&accent=purple" -> {e: look, dark: 1, accent: purple}. Short plain values
+    // only: anything long or odd is dropped.
+    static Dictionary<string, string> ParseQuery(string query)
+    {
+        var d = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (!query.StartsWith('?')) return d;
+        foreach (var pair in query[1..].Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            int eq = pair.IndexOf('=');
+            string k = eq < 0 ? pair : pair[..eq], v = eq < 0 ? "" : pair[(eq + 1)..];
+            try { k = Uri.UnescapeDataString(k); v = Uri.UnescapeDataString(v.Replace('+', ' ')); } catch { continue; }
+            if (k.Length is 0 or > 16 || v.Length > 32 || d.Count >= 8) continue;
+            d[k] = v;
+        }
+        return d;
     }
 
     static bool HasBody(string head)
@@ -242,7 +275,7 @@ sealed class WebServer
         if (zip == null)
         {
             Send(s, 404, "Not Found", "text/plain; charset=utf-8",
-                 Encoding.UTF8.GetBytes("The Mac app isn't included in this copy of USB-C Display Setup.\n"), headOnly, null, keepAlive);
+                 Encoding.UTF8.GetBytes("This copy of USB-C Display Setup doesn’t include USB-C Display for Mac.\n"), headOnly, null, keepAlive);
             return keepAlive;
         }
         var h = "HTTP/1.1 200 OK\r\n" +
@@ -271,21 +304,30 @@ sealed class WebServer
         return keepAlive;
     }
 
-    // web/index.html with the size and notarization filled in.
+    // web/index.html with the Mac app's size, version and notarization filled in:
+    // {{HAS_APP}} true|false, {{SIZE}} "0.7 MB", {{VERSION}} the app's CFBundleVersion ("5"),
+    // {{NOTARIZED}} true|false.
     byte[] LandingPage()
     {
         var raw = Resources.Get("web/index.html");
         string html = raw != null ? Encoding.UTF8.GetString(raw)
             : "<!doctype html><meta charset=utf-8><title>USB-C Display</title><p><a href=\"/USB-C-Display.zip\">Download USB-C Display</a>";
-        using (var zip = Payload.OpenMacZip(out long size))
-        {
-            html = html.Replace("{{HAS_APP}}", zip != null ? "true" : "false")
-                       .Replace("{{SIZE}}", zip != null ? FormatSize(size) : "");
-        }
-        html = html.Replace("{{NOTARIZED}}", Machine.AppNotarized ? "true" : "false");
+        var (size, version) = Payload.MacAppInfo();
+        html = html.Replace("{{HAS_APP}}", size > 0 ? "true" : "false")
+                   .Replace("{{SIZE}}", size > 0 ? FormatSize(size) : "")
+                   .Replace("{{VERSION}}", System.Net.WebUtility.HtmlEncode(version))
+                   .Replace("{{NOTARIZED}}", Machine.AppNotarized ? "true" : "false");
         return Encoding.UTF8.GetBytes(html);
     }
 
-    static string FormatSize(long bytes) =>
-        bytes >= 1 << 20 ? $"{bytes / 1048576.0:0.#} MB" : $"{Math.Max(1, bytes / 1024)} KB";
+    // As the setup window shows it (steps.js mb()) and as the Mac counts sizes (decimal MB, as in
+    // Safari's Downloads): one decimal below 10 MB ("0.7 MB"), whole MB above.
+    public static string FormatSize(long bytes)
+    {
+        double mb = bytes / 1e6;
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        // Halves round up, as the page's toFixed() does.
+        return mb < 10 ? Math.Max(0.1, Math.Round(mb, 1, MidpointRounding.AwayFromZero)).ToString("0.0", inv) + " MB"
+                       : Math.Round(mb, MidpointRounding.AwayFromZero).ToString("0", inv) + " MB";
+    }
 }

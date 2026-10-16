@@ -9,11 +9,10 @@ using Microsoft.Win32;
 
 namespace UsbcSetup;
 
-// Facts about this laptop: Windows, the USB4 hardware, the screen, the theme.
+// Facts about this PC: Windows, the USB4 hardware, the screen, the theme, this exe's signature.
 static class Machine
 {
     public static int WindowsBuild => Environment.OSVersion.Version.Build;
-    public static bool MicaSupported => WindowsBuild >= 22621;
 
     public static string Arch => RuntimeInformation.OSArchitecture switch
     {
@@ -25,6 +24,8 @@ static class Machine
 
     public static long SetupBuild => long.TryParse(Metadata("SetupBuild"), out long b) ? b : 0;
     public static bool AppNotarized => string.Equals(Metadata("AppNotarized"), "true", StringComparison.OrdinalIgnoreCase);
+    // The Mac app version this build carries, when its Info.plist can't be read from the zip.
+    public static string MacAppVersion => Metadata("MacAppVersion") ?? "";
 
     static string Metadata(string key)
     {
@@ -87,9 +88,9 @@ static class Machine
         return cut > 0 ? id[..cut] : id;
     }
 
-    // "ok": this laptop has USB4 (what makes the cable a network). "missing": nothing that looks
+    // "ok": this PC has USB4 (what makes the cable a network). "missing": nothing that looks
     // like USB4 or Thunderbolt. "unknown": couldn't tell.
-    // Some laptops (Qualcomm's) only list their USB4 routers while something is plugged into the
+    // Some PCs (Qualcomm's) only list their USB4 routers while something is plugged into the
     // port; what's always there is the USB4 bus or host router, recognised by its driver service.
     // The router's hardware ID (for the link restart task) then comes from an earlier connection,
     // or stays null until the cable is plugged in.
@@ -121,6 +122,8 @@ static class Machine
     }
 
     // ---- Theme ----
+    // Only the page's first look before it knows the Mac's: the window draws macOS's colours, never
+    // Windows' accent.
     public static bool DarkMode()
     {
         try
@@ -129,45 +132,6 @@ static class Machine
             return k?.GetValue("AppsUseLightTheme") is int v && v == 0;
         }
         catch { return false; }
-    }
-
-    // The accent colours for the UI's CSS, as #rrggbb. --accent is the shade Windows 11 fills
-    // buttons with (AccentDark1 in light mode, AccentLight2 in dark mode); --accent-system is the
-    // colour picked in Settings, and the light/dark shades are there too.
-    public static Dictionary<string, string> AccentColors(bool dark)
-    {
-        var d = new Dictionary<string, string>();
-        try
-        {
-            var ui = new Windows.UI.ViewManagement.UISettings();
-            void Add(string name, Windows.UI.ViewManagement.UIColorType t)
-            {
-                var c = ui.GetColorValue(t);
-                d[name] = $"#{c.R:x2}{c.G:x2}{c.B:x2}";
-            }
-            Add("--accent-system", Windows.UI.ViewManagement.UIColorType.Accent);
-            Add("--accent", dark ? Windows.UI.ViewManagement.UIColorType.AccentLight2 : Windows.UI.ViewManagement.UIColorType.AccentDark1);
-            Add("--accent-light-1", Windows.UI.ViewManagement.UIColorType.AccentLight1);
-            Add("--accent-light-2", Windows.UI.ViewManagement.UIColorType.AccentLight2);
-            Add("--accent-light-3", Windows.UI.ViewManagement.UIColorType.AccentLight3);
-            Add("--accent-dark-1", Windows.UI.ViewManagement.UIColorType.AccentDark1);
-            Add("--accent-dark-2", Windows.UI.ViewManagement.UIColorType.AccentDark2);
-            Add("--accent-dark-3", Windows.UI.ViewManagement.UIColorType.AccentDark3);
-            return d;
-        }
-        catch { }
-        try
-        {
-            using var k = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\DWM");
-            if (k?.GetValue("AccentColor") is int abgr)
-            {
-                d["--accent"] = d["--accent-system"] = $"#{abgr & 0xFF:x2}{(abgr >> 8) & 0xFF:x2}{(abgr >> 16) & 0xFF:x2}";
-                return d;
-            }
-        }
-        catch { }
-        d["--accent"] = dark ? "#60cdff" : "#005fb8";
-        return d;
     }
 
     // ---- The screen ----
@@ -186,37 +150,107 @@ static class Machine
         catch { return (96, 0); }
     }
 
-    // How big the Mac's display can look on this panel. "Same size as on a MacBook" is computed
-    // from the panel's real pixels per inch (from its EDID) against the ~129 points per inch a
-    // MacBook shows; it's left out when Windows can't tell the panel's size.
+    // How big the Mac's display can look on this panel, as a scale (panel pixels per Mac point,
+    // in percent). The recommended one makes things as big as on a MacBook: it comes from the
+    // panel's real pixels per inch (from its EDID) against the ~129 points per inch a MacBook
+    // shows, or Windows' own scaling when Windows can't tell the panel's size. Setup doesn't offer
+    // the choice (the tray's Display Options does); it uses the recommended size, or a saved one.
     public static List<ScaleOption> ScaleOptions(out int recommended)
     {
         var (eff, raw) = PrimaryDpi();
         int windows = Math.Clamp((int)Math.Round(eff * 100.0 / 96), 100, 300);
         int same = raw >= 90 && raw <= 600 ? Math.Clamp((int)Math.Round(raw * 100.0 / 129 / 5) * 5, 100, 200) : 0;
+        Size panel;
+        try { panel = Screen.PrimaryScreen?.Bounds.Size ?? Size.Empty; } catch { panel = Size.Empty; }
 
         var list = new List<ScaleOption>();
-        void Add(int id, string label, string detail)
+        void Add(int id, string label)
         {
             foreach (var o in list) if (o.Id == id) return;
+            string detail = panel.Width > 0 ? $"Looks like {panel.Width * 100 / id} × {panel.Height * 100 / id}" : "";
             list.Add(new ScaleOption { Id = id, Label = label, Detail = detail });
         }
 
-        if (same > 0) Add(same, "Same size as a MacBook", "Text looks as big as on a Mac laptop");
+        if (same > 0) Add(same, "Default");
         if (windows > 100 && windows < 200 && windows != same)
-        {
-            string label = same == 0 ? "Same size as Windows" : windows > same ? "Larger text" : "Smaller text";
-            Add(windows, label, "The size Windows uses on this screen");
-        }
-        Add(100, "More space", "More fits, but text is small");
-        if (list.Count < 3) Add(200, "Largest", "Big, easy to read text, less fits");  // three choices fit the screen
+            Add(windows, same == 0 ? "Default" : windows > same ? "Larger Text" : "Smaller Text");
+        Add(100, "More Space");
+        if (list.Count < 3) Add(200, "Largest Text");
         recommended = same > 0 ? same : windows > 100 && windows < 200 ? windows : list[0].Id;
         foreach (var o in list) o.Recommended = o.Id == recommended;
         return list;
     }
+
+    // ---- This exe's signature ----
+    // True when Windows trusts this file's Authenticode signature, so UAC shows a publisher
+    // instead of "Unknown". Offline: no revocation check, no downloads.
+    public static bool IsSigned(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+        IntPtr file = IntPtr.Zero;
+        var fileInfo = new WINTRUST_FILE_INFO { cbStruct = Marshal.SizeOf<WINTRUST_FILE_INFO>(), pcwszFilePath = path };
+        try
+        {
+            file = Marshal.AllocHGlobal(Marshal.SizeOf<WINTRUST_FILE_INFO>());
+            Marshal.StructureToPtr(fileInfo, file, false);
+            var wd = new WINTRUST_DATA
+            {
+                cbStruct = Marshal.SizeOf<WINTRUST_DATA>(),
+                dwUIChoice = 2,                  // WTD_UI_NONE
+                fdwRevocationChecks = 0,         // WTD_REVOKE_NONE
+                dwUnionChoice = 1,               // WTD_CHOICE_FILE
+                pFile = file,
+                dwStateAction = 1,               // WTD_STATEACTION_VERIFY
+                dwProvFlags = 0x10 | 0x1000,     // WTD_REVOCATION_CHECK_NONE | WTD_CACHE_ONLY_URL_RETRIEVAL
+            };
+            var action = new Guid("00AAC56B-CD44-11d0-8CC2-00C04FC295EE");  // WINTRUST_ACTION_GENERIC_VERIFY_V2
+            int result = WinVerifyTrust(new IntPtr(-1) /*INVALID_HANDLE_VALUE: no UI*/, ref action, ref wd);
+            wd.dwStateAction = 2;                // WTD_STATEACTION_CLOSE
+            WinVerifyTrust(new IntPtr(-1), ref action, ref wd);
+            return result == 0;
+        }
+        catch (Exception e)
+        {
+            Log.Write("signature: " + e.Message);
+            return false;
+        }
+        finally
+        {
+            if (file != IntPtr.Zero)
+            {
+                Marshal.DestroyStructure<WINTRUST_FILE_INFO>(file);
+                Marshal.FreeHGlobal(file);
+            }
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct WINTRUST_FILE_INFO
+    {
+        public int cbStruct;
+        [MarshalAs(UnmanagedType.LPWStr)] public string pcwszFilePath;
+        public IntPtr hFile, pgKnownSubject;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct WINTRUST_DATA
+    {
+        public int cbStruct;
+        public IntPtr pPolicyCallbackData, pSIPClientData;
+        public int dwUIChoice, fdwRevocationChecks, dwUnionChoice;
+        public IntPtr pFile;
+        public int dwStateAction;
+        public IntPtr hWVTStateData, pwszURLReference;
+        public int dwProvFlags, dwUIContext;
+        public IntPtr pSignatureSettings;
+    }
+
+    [DllImport("wintrust.dll", ExactSpelling = true, CharSet = CharSet.Unicode)]
+    static extern int WinVerifyTrust(IntPtr hwnd, ref Guid action, ref WINTRUST_DATA data);
 }
 
-// HKCU\Software\USB-C Display: the values the watcher reads too (windows/watcher/UsbcWatcher.cs).
+// HKCU\Software\USB-C Display: the values the watcher reads too (windows/watcher/UsbcWatcher.cs),
+// and the place in setup (CONTRACT.md section 2, `setup`).
 static class Settings
 {
     public const string Key = @"Software\USB-C Display";
@@ -237,8 +271,22 @@ static class Settings
         k.SetValue(name, value, RegistryValueKind.DWord);
     }
 
+    // SetInt that only logs when the registry says no: setup carries on in memory.
+    public static void Save(string name, int value)
+    {
+        try { SetInt(name, value); }
+        catch (Exception e) { Log.Write($"settings: can't save {name}: {e.Message}"); }
+    }
+
     public static int? Scale => GetInt("Scale");
     public static bool ColorManaged => GetInt("ColorManaged") != 0;   // on unless turned off
-    public static bool Input => GetInt("Input") != 0;
+    public static bool Input => GetInt("Input") == 1;                 // off unless turned on
     public static bool SetupDone => GetInt("SetupDone") is int v && v != 0;
+
+    // The place in setup.
+    public static bool SetupStarted => GetInt("SetupStarted") == 1;
+    public static string AxChoice => GetInt("AxChoice") switch { 1 => "yes", 2 => "no", _ => "" };
+    public static bool LoginSkip => GetInt("LoginSkip") == 1;
+    public static bool ElevationAsked => GetInt("ElevationAsked") == 1;
+    public static int ElevationResult => GetInt("ElevationResult") ?? 0;   // 1 done, 2 refused, 3 failed
 }

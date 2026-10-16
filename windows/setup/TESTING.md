@@ -1,19 +1,21 @@
-# Testing setup on real machines
+# Testing setup on real computers
 
-Nothing in setup has run on real hardware yet. This list walks the whole first run on two fresh
-machines and names everything that was only guessed from research. Tick each box, and write down
-what you actually saw when it differs (exact dialog text, button names, timings).
+This list walks the whole first run on two fresh computers, then the checks the host must pass,
+then Appendix B: everything the design guessed and that only hardware can answer. Tick each box,
+and write down what you actually saw when it differs (exact dialog text, button names, timings).
+The screens and copy to compare with are in design/SPEC.md (section 3).
 
 ## Before you start
 
-**Windows laptop**
-- [ ] A Windows 11 laptop with a USB4 or Thunderbolt port. Note the maker, model, Windows build
-      (`winver`) and language.
+**Windows PC**
+- [ ] A Windows 11 PC with a USB4 or Thunderbolt port. Note the maker, model, Windows build
+      (`winver`), language and display scaling.
 - [ ] Nothing of ours on it. In an admin PowerShell:
   - `netsh advfirewall firewall show rule name="USB-C Display (cable only)"` says no rules match
     (delete with `netsh advfirewall firewall delete rule name="USB-C Display (cable only)"`).
   - `schtasks /query /tn "\USB-C Display\"` finds nothing.
-  - `%LOCALAPPDATA%\Programs\USB-C Display` and `%LOCALAPPDATA%\UsbcDisplay` don't exist.
+  - `%LOCALAPPDATA%\Programs\USB-C Display`, `%LOCALAPPDATA%\USB-C Display` and
+    `%LOCALAPPDATA%\UsbcDisplay` don't exist.
   - `HKCU\Software\USB-C Display` doesn't exist.
 - [ ] Test once with an **administrator** account and once with a **standard** account.
 - [ ] Note the Smart App Control state (Windows Security, App & browser control).
@@ -33,7 +35,8 @@ what you actually saw when it differs (exact dialog text, button names, timings)
 - Logs to collect after each run:
   - Windows: `%LOCALAPPDATA%\UsbcDisplay\setup.log` and `receiver.log`
   - Mac: `~/Library/Logs/USB-C Display.log`
-- Screen photos of every system dialog on both machines. The wizard's mockups copy their wording.
+- Screen recordings of this PC (20 fps is enough) for the hand-off and the handover, and photos
+  of every system dialog on both computers. The pictures in the window copy their wording.
 
 ## The run, step by step
 
@@ -41,189 +44,227 @@ what you actually saw when it differs (exact dialog text, button names, timings)
 - [ ] Edge download: note any "isn't commonly downloaded" bar and which buttons it shows.
 - [ ] SmartScreen: does "Windows protected your PC" appear? Is "Run anyway" there?
 - [ ] Smart App Control: if it's on, does it block the unsigned exe with no way through?
-- [ ] No WebView2 runtime (Windows 10 or a stripped image only): the message box offers the download.
-- [x] The window opens as a Mac window: traffic lights top left (close, minimize, zoom off),
-      16 pt continuous corners with the desktop showing outside them, the edge, a Mac-shaped
-      shadow that follows the window and hides when it's minimized. No white flash (Oct 2026).
-- [x] The lights show their symbols on hover and go grey with the title when the window isn't
-      in front; light and dark mode (Oct 2026, previewed).
+- [ ] No WebView2 runtime (Windows 10 or a stripped image only): a dialog with the app's icon,
+      “USB-C Display Setup needs Microsoft Edge WebView2, which isn’t on this PC.” and the
+      buttons **Download…** and **Cancel** (Cancel the default). Download… opens Microsoft's page.
+- [ ] The window appears whole, at once, centred, with its shadow: no empty or half-drawn frame,
+      no "Getting ready…", no entrance animation (setup.log: `ui: shown` before the window shows).
+- [ ] It is a Mac window: traffic lights at (16,16), (39,16), (62,16) pt, zoom grey, no title
+      text, 16 pt continuous corners with the desktop outside them, the edge, the shadow.
+      The window is 800·f × 600·f panel pixels (f = the recommended scale; setup.log and
+      Spy++/`GetWindowRect`).
+- [ ] The shadow is the same whether the window is in front or not (only the lights and the
+      primary button go grey).
+- [ ] The colours are macOS's (blue until the Mac's accent is known), not Windows' accent.
+- [ ] Dragging the window anywhere outside the buttons moves it. Alt+F4 closes it.
+- [ ] The display doesn't turn off during a 20-minute idle setup session.
 - [ ] Windows 10: the transparent corners and the shadow (DWM corner and border settings don't exist there).
-- [ ] Dragging the top bar moves the window. Snap still works (Win + arrows, drag to the edge).
-      Alt + F4 closes it, also with the focus inside the page.
-- [ ] Text is Segoe UI Variable. Light and dark mode follow Windows. Accent colour matches Settings.
 
-### 2. Check this laptop
-- [ ] A laptop with a USB4 port shows "Found". Note the router hardware ID from setup.log.
-- [ ] A laptop without USB4 shows the "can't do it" screen.
+### 2. Use This PC as a Display (Welcome)
+- [ ] The USB4 check happens before the window appears. A PC without USB4 shows "Unable to Use
+      This PC as a Display" with **Quit**; connecting a working cable turns it into Welcome.
+- [ ] Standard account: the second paragraph asks for an administrator of this PC.
 
-### 3. Install
-- [ ] Install takes a few seconds, asks for nothing, and the window reopens in the same place
-      from the installed copy (setup.log: a second process starting with `--resume`).
-- [ ] The page keeps its place after that reload, not back at Welcome.
-- [ ] Start menu entry, Settings > Apps entry, the watcher in the tray, the Run key.
-- [ ] The installed setup exe has no `Zone.Identifier` stream
-      (`Get-Item -Stream * "<path>"` in PowerShell).
-- [ ] Run the downloaded exe again later: it installs again and hands over, it doesn't start a second server.
-
-### 4. One approval (UAC)
-- [ ] The UAC box looks like the mockup: "Publisher: Unknown" until the exe is signed.
-- [ ] Click **No**: the step says Windows got a No, and Try again works.
-- [ ] Standard account: the box asks for an admin name and password, as the copy says.
-- [ ] Click **Yes**: the step turns "Approved". Check the rules exist (TCP 80 and UDP 5353, inbound,
-      remote addresses link-local only, program = the installed setup exe) and the two tasks
-      exist under `\USB-C Display\`.
+### 3. Allow Changes on This PC (install and Windows' prompt)
+- [ ] **Continue**: the buttons vanish at once, "Installing…" with the close light greyed, then
+      the check with "Installed", then "Waiting for Windows…".
+- [ ] Windows' prompt appears **no earlier than 3.0 s after Continue** (setup.log: `ui: setUp`
+      then `elevate:`), in front, from the downloaded copy. Note what it shows ("Publisher:
+      Unknown" until the exe is signed; the body says so when `laptop.signed` is false).
+- [ ] Our status line, "Waiting for you to click Yes…", is readable under Windows' dimmed screen.
+- [ ] After 5 s without an answer, the body tells you about the flashing shield in the taskbar.
+- [ ] **Yes**: "Setting up this PC…", then the check with "This PC is ready". The rules exist
+      (TCP 80 and UDP 5353, inbound, link-local only, program = the installed setup exe) and the
+      two tasks exist under `\USB-C Display\`.
+- [ ] **No**: "Changes Not Allowed" with **Try Again**. Close setup and open it again: no prompt
+      by itself (`ElevationAsked` = 1, `ElevationResult` = 2); **Try Again** asks.
+- [ ] Standard account: the prompt asks for an administrator's name and password, as the copy says.
 - [ ] Non-English Windows: the firewall check still reports the rules (setup.log has no
       "firewall: can't read the rules").
-- [ ] A laptop with no Qualcomm router ID: does elevation report done with only the firewall
-      rules? Does a link freeze later show a UAC prompt? (Known: Link.cs only trusts the Qualcomm
-      router task, so yes it will. See the open issues.)
-- [ ] If a task fails but the firewall rules are in: the step says "Your Mac can get its app" and Next works.
+- [ ] Only the tasks fail (firewall rules in): setup goes on silently; setup.log says why.
+- [ ] A PC that lists its USB4 router only with the cable in: Yes before the cable was ever in,
+      then plug in, close setup and open it again. No second prompt and no “Allow Changes”
+      screen; setup.log says `laptop: a recovery task is missing (router …)`. Delete the firewall
+      rules too and open setup again: it asks again (“Click Continue, then click Yes…”).
+- [ ] Another copy of USB-C Display is open during the install: "Unable to Install USB-C Display"
+      (in use) with **Try Again**.
 
-### 5. Plug in the cable
-- [ ] Plug the cable into both. The step turns "Cable connected". Note the seconds it took.
-- [ ] Mac: does "Allow accessory to connect?" appear for a computer-to-computer link? Exact wording?
-      Does it need the Mac unlocked? What happens with Don't Allow?
-- [ ] Wrong port (a plain USB-C port) and the charge-only cable: after 40 s the "Still waiting"
-      help appears.
-- [ ] The watcher does not show its "Use as a screen / Data transfer" popup during setup.
-      Plugging in with the setup closed reopens setup instead.
-- [ ] Power over the cable (one machine on battery): note any link flapping in setup.log.
+### 4. The hand-off to the installed copy
+- [ ] After "This PC is ready", nothing on screen changes, not even the shadow (a 20 fps recording
+      shows no frame without the window and no double shadow; at most one display frame, about
+      16 ms, without the shadow, as measured in a two-process simulation), and the close light
+      stays grey until the next screen. The close and minimise lights keep their colours through the swap
+      (they don't go grey for a moment).
+- [ ] No other window (Edge, File Explorer) comes up over setup during the swap, also when setup
+      was opened from Edge's downloads.
+- [ ] setup.log: the second process starts with `--resume --at … --behind … --hold "allow-pc|done|…|1"`;
+      the old one logs `handoff: the installed copy's window is in front`; the new one logs
+      `handoff: the downloaded copy's window went after N ms (hidden)` (N well under 100), then
+      `setup: hold released`.
+- [ ] Slow first start (a cold PC): the old window stays up until the new one has drawn its
+      frame (up to 15 s), never an empty window.
+- [ ] Then a normal crossfade to the next screen (Connect Your Mac, or further).
+- [ ] Start menu entry ("Use this PC as a display for your Mac"), Settings > Apps entry, the
+      watcher in the tray, the Run key. The installed setup exe has no `Zone.Identifier` stream
+      (`Get-Item -Stream * "<path>"` in PowerShell).
+- [ ] Run the downloaded exe again later: never Welcome; "Installing…", then the same hand-off;
+      it doesn't start a second server.
+- [ ] Delete `%LOCALAPPDATA%\USB-C Display\WebView2` and open setup again: it never shows Welcome
+      after Continue.
 
-### 6. Find each other
-- [ ] "Found your Mac" within about 30 s. Note how long; record macV6 and macV4 timings from setup.log.
-- [ ] With a VPN or filter app on the Mac: after 40 s the help cards show.
+### 5. Connect Your Mac
+- [ ] Connect the cable. "Looking for your Mac…" turns into "Connecting to your Mac…", then the
+      next screen. Note the seconds it took.
+- [ ] 15 s without a cable: "Make sure your Mac is unlocked…"; 90 s: "Cable Not Detected".
+- [ ] Wrong port or charge-only cable: the same, then **Learn More…** helps.
+- [ ] The Mac isn't found 40 s after the plug: "Unable to Connect to Your Mac".
+- [ ] Port 80 taken (IIS or another http.sys user): "Another app on this PC is using the
+      connection…" (`server.error = 'port'`).
+- [ ] Unplug for 2 s on a later screen: nothing changes. Unplug for longer: "The cable was
+      disconnected…" after 3 s, and back where it was when reconnected.
+- [ ] The watcher shows no popup while setup is open.
 
-### 7. Open Safari (Mac)
-- [ ] The laptop shows `http://usbc.local`. Typing it in Safari on the Mac opens the landing page.
-- [ ] Does Safari resolve usbc.local over the cable at all? (setup.log: `web: GET /`.) If Safari
-      treats it as a search, the hint on the laptop covers that.
-- [x] The `http://169.254.x.x` address doesn't open on a Mac on Wi-Fi (Oct 2026): Safari's request
-      goes out over Wi-Fi. usbc.local did open, so the laptop keeps showing it and offers the
-      address only as a second try after 45 s.
-- [ ] Is port 80 free? (Some laptops have IIS or other http.sys users.) If not, setup.log shows
-      the web server failing to bind, and the laptop shows "isn't ready to send the app yet" after 20 s.
-- [ ] Windows Defender Firewall asks nothing extra while the rules are in.
-- [ ] mDNS: does Windows' own mDNS (UDP 5353) clash with ours? Is the built-in "mDNS (UDP-In)"
-      rule on? Note it.
-- [ ] Requests from Wi-Fi (another device opening the laptop's Wi-Fi address on port 80) are refused.
+### 6. Get USB-C Display on Your Mac
+- [ ] The picture shows Safari on a Mac, in the Mac's appearance and accent; the big address is
+      `usbc.local`. Typing it in Safari opens the page (setup.log: `web: GET /`).
+- [ ] 15 s: the `http://` hint; 45 s: the cable IPv4 address, only if it differs.
+- [ ] The page's Download click turns the picture to the download (`/event?e=download`); if Safari
+      asks to allow downloads, the window says so within a second.
+- [ ] The page sends its look (`/event?e=look&dark=…&accent=…`): the window's pictures use it.
 
-### 8. Download and open (Mac)
-- [ ] Safari asks "Allow downloads on usbc.local?" or not. Exact wording.
-- [ ] The landing page shows the same icon as the app, and the file size.
-- [ ] The laptop's progress bar follows the download, then "done".
-- [ ] Safari unzips it: what does the Downloads list show (name, label)?
-- [ ] Double-click it. Not notarized (current builds): "USB-C Display Not Opened" with Done and
-      Move to Trash. Note the exact text on macOS 15, 26 and 27.
-- [ ] Done, then System Settings > Privacy & Security, scroll down, Open Anyway, then Open Anyway
-      again in the second box, then the password. Does it match the five sub-steps on the laptop?
-      Does Open Anyway disappear after about an hour?
-- [ ] Notarized build (when there is one): only "Are you sure you want to open it?" with Open.
-- [ ] "Accept incoming network connections?" (Mac firewall on): when, and which buttons.
-- [ ] "Background Items Added" notification: when does it appear?
-- [ ] The laptop notices the app (mac.reachable) within a few seconds of it opening.
+### 7. Open USB-C Display on Your Mac
+- [ ] Each step follows Safari's focus: downloads → "Not Opened" (Done, not Move to Trash) →
+      the page's **Open Privacy & Security** → Safari's question (**Allow**) → System Settings'
+      **Open Anyway** (twice) and Touch ID. Note where the focus events really come (setup.log
+      `web: GET /event?e=…`).
+- [ ] Back in Safari after System Settings: the page's button again, never Safari's question.
+- [ ] Move to Trash, then Download Again on the page: back to the first step.
+- [ ] Notarized build (when there is one): only "Are you sure you want to open it?" with **Open**.
+- [ ] "Login Item Added" notification: when does it appear? Nothing to click.
+- [ ] The app opens with no window, moves itself to Applications, and this PC notices within a
+      few seconds.
 
-### 9. Move the app
-Since Mac app version 3 the app moves itself when it's opened outside Applications; this step
-only shows when that failed. Tested over SSH on macOS 27.0.1 (Oct 2026), with Safari's download
-flags copied onto the test copy (`01c3` on the folder, `00c3`/`0083` inside):
-- [x] Opened from Downloads (run from a read-only copy): copies itself to /Applications, clears
-      the flags on every file, starts from there, sets up the agent, and the laptop connects.
-      No prompt on an administrator account; the Downloads copy stays (removing it made macOS
-      ask for access to the Downloads folder).
-- [x] Opened from Downloads again with everything installed: hands over to the copy in
-      Applications, the running agent isn't touched.
-- [x] Reinstall over leftovers (app deleted, an SMAppService registration and old notes left
-      behind): switches the old registration off and sets up its own agent.
-- [x] Dragged to Applications by hand (all 13 items flagged): the app clears its own flags with
-      no prompt and the agent starts.
-- [x] Agent stopped but recorded as set up: "isn't running; starting it again".
-- [ ] Standard Mac account: what does the administrator fallback show?
-- [ ] The "Move it for me" fallback after a failed move (cancelled password prompt).
+### 8. Allow Screen Recording on Your Mac
+- [ ] The Mac's prompt appears by itself, with no click on this PC. The picture follows: prompt →
+      System Settings (switch) → password or Touch ID (stays on the same picture while it's up).
+- [ ] **Quit & Reopen** (or the app reopening itself): the window stays on this screen (never
+      "Open USB-C Display" or "Unable to Connect") until the app answers again.
+- [ ] Close the prompt: 6 s later "Screen recording is off…" with **Open System Settings**.
 
-### 10. Start automatically
-- [ ] "Background Items Added" appears (the agent is a plist in ~/Library/LaunchAgents since
-      version 3) and Login Items lists it under the app's name.
-- [ ] Switch it off in Login Items: the laptop notices and "Open Login Items on my Mac" works.
-- [x] `launchctl print gui/$(id -u)/com.usbc-display.agent` shows the agent running, and the
-      Finder copy quits only once it is (Oct 2026).
-- [x] The agent's log says "running as a login agent" (`--agent`).
+### 9. Use This PC’s Keyboard and Trackpad
+- [ ] The offer on this PC. **Not Now**: never asked again (`AxChoice` = 2), Ready has no
+      keyboard row, and the receiver starts with `--no-input`.
+- [ ] **Continue**: the Mac asks for Device Control and Data Access; turning it on moves on with
+      no relaunch. Ready shows the keyboard row; the receiver starts without `--no-input`
+      (`Input` = 1).
+- [ ] A Mac with a stale permission entry from an older signing certificate (the switch is on but
+      the app isn't allowed): the Mac app resets its entry before asking (Mac log), and the
+      switch then works.
 
-### 11. Share the picture (Screen Recording)
-- [ ] "Open it on my Mac" shows macOS's Screen Recording prompt the first time, the Settings pane after.
-- [ ] Turning it on: does macOS offer "Quit & Reopen"? Does that restart the agent, or start a
-      second copy from Finder next to it? Does anything else hold port 48100 (`lsof -i :48100`)?
-- [ ] If nobody reopens it, the laptop restarts the Mac app after 8 s and the step finishes.
-- [ ] Clicking Deny: the recovery card works through Settings.
+### 10. USB-C Display Is Ready to Use (the handover)
+- [ ] With this window in front, the display starts by itself about 0.65 s after Ready appears.
+      With another window in front: "Show Mac Desktop" and the taskbar button flashes.
+- [ ] Before the receiver starts, the window comes in front, onto this PC's own panel, at least
+      40 pt below the top (setup.log: `screen: window moved …` when it had to move).
+- [ ] A scale whose window is taller than the panel allows (e.g. Largest Text, `Scale` 200, on a
+      1080p or 1200p panel): setup opens smaller than 800 × 600 pt, evenly, and after the cut
+      the Mac's copy has its bottom edge and shadow on the display, below the Mac's menu bar.
+- [ ] At the cut, only the background changes to the Mac's wallpaper: the window doesn't move by
+      a pixel, the lights and **Done** don't turn grey, the shadow looks the same (20 fps
+      recording; compare frames before and after).
+- [ ] Within 1 s of "Picture on screen" (receiver.log) the receiver has the keyboard (setup.log:
+      `the display has the keyboard`); with input on, typing reaches the Mac.
+- [ ] `SetupDone` = 1 in the registry as soon as the Mac desktop shows.
+- [ ] 0.8 s after the cut: "Desktop extended"; 1.4 s: the body changes, **Return to Windows** and
+      **Done** appear. Moving the Mac's pointer onto this display changes the sentence.
+- [ ] **Done** with one click on the Mac's copy (even when it isn't key): both copies close, the
+      Mac desktop stays, the watcher is in the tray.
+- [ ] **Return to Windows** (or Ctrl-Alt-Esc): Windows comes back with this window already in
+      place (no frame without it), then the Mac's copy closes; **Show Mac Desktop** / **Done**.
+- [ ] With Screen Recording off at this point: the receiver prints "Refused: screen recording",
+      exits with code 3, and the window goes to "Screen recording is off…".
+- [ ] No `UsbcDisplay.exe` (delete it from the install folder): "Some files of USB-C Display are
+      missing…" with **Quit**.
 
-### 12. Laptop keyboard (Accessibility)
-- [ ] Prompt the first time, Settings pane after. The step turns done within a second or two of
-      the toggle (no input needed).
-- [ ] Skip works and the screen later starts without the laptop's input.
-
-### 13. Choose the size
-- [ ] At most three choices, one marked Recommended. The recommended one really makes text look
-      as big as on a MacBook on this panel (critique C10: the recommendation comes from the
-      reported DPI, which may be wrong on some laptops).
-
-### 14. First picture and Try it out
-- [ ] "Show my Mac's screen" goes full screen on the laptop with the Mac's wallpaper.
-- [x] The handover (Mac app 4): the window stays put and only the background changes. Since the
-      laptop's window became a Mac window too, the traffic lights, corners and title bar are the
-      same on both sides of the cut (within half a pixel; colours within 1 level). Measured
-      with a 20 fps recording of the laptop (Oct 2026, 150 % on the laptop, 1.25 px a point on
-      the Mac): one frame from Windows to the Mac, same step and footer, macOS's buttons top left,
-      text within about 1 px, colours the same (the panel profile waits until the window closes).
-- [x] Clicks in the Mac's copy reach the laptop's (setup.log: "… (on the Mac)").
-- [x] Finish closes the Mac's copy, the picture stays, and the Mac log says the panel profile is
-      applied again.
-- [x] The watcher shows no "Can't reach the Mac yet" balloon while the setup's picture is up
-      (it used to: it counted the setup's receiver as its own).
-- [ ] Where does macOS place the new display by default (left or right of the Mac)? The wizard
-      says "slide off the right edge".
-- [ ] Ctrl + Alt + Esc gives the laptop back, and the wizard comes back with "Welcome back".
-- [ ] With Screen Recording off at this point: the receiver gets a silent close (the receiver
-      doesn't send HELLO_STATUS yet), and `screen.error` or the picture-error state shows.
-
-### 15. All set
-- [ ] Finish closes the window, the watcher stays in the tray, `SetupDone` = 1 in the registry.
-- [ ] Unplug and plug in again: the watcher's popup appears now, not the setup.
-- [ ] Reboot both: plugging in works without opening anything on the Mac.
+### 11. After setup
+- [ ] Unplug and connect again: the display starts by itself, with no popup.
+- [ ] Reboot both: connecting works without opening anything on the Mac.
+- [ ] Open setup from the Start menu on a set-up PC and Mac: Ready, and the handover runs once.
 
 ## Later and edge cases
-- [ ] Mac asleep or locked mid-setup: the laptop says so, and carries on when it wakes.
-- [ ] Unplug mid-setup: "The cable is unplugged" replaces the buttons; plugging back resumes.
-- [ ] Lid closed on the Mac with the laptop as a screen.
-- [ ] A few weeks later: macOS 15+ asks again to "Continue to allow" screen recording.
-- [x] An older Mac app (version 2) already in /Applications: the new download replaces it with no
-      prompt (Oct 2026). Its SMAppService agent didn't start again afterwards, which is why
-      version 3 has its own plist; replacing a version 3 copy with a later one is still to test.
-- [ ] Uninstall from Settings > Apps: files, tasks, firewall rules, Run key and Start menu entry gone.
+- [ ] Mac asleep or locked mid-setup: "Unable to Connect to Your Mac" after 4 s of silence, help
+      at 40 s, and on with the next screen when it wakes.
+- [ ] Lid closed on the Mac with this PC as its display.
+- [ ] A few weeks later: macOS asks again to "Continue to allow" screen recording.
+- [ ] Uninstall from Settings > Apps: “Remove USB-C Display from this PC?” with **Remove** and
+      **Cancel** (Cancel the default, Esc cancels), the Mac note in the footnote. Remove, then
+      Yes in Windows' prompt: “USB-C Display was removed from this PC.”; files, tasks, firewall
+      rules, Run key, Start menu entry, the Settings > Apps entry and `HKCU\Software\USB-C Display` gone.
+- [ ] Uninstall and click **No** in Windows' prompt: the message says the rules and cable tasks
+      stay and how to remove them. The Settings > Apps entry and `USB-C Display Setup.exe` stay
+      (nothing else in the folder); uninstalling again asks Windows again and then removes everything.
 - [ ] Mac removal: `launchctl bootout gui/$(id -u)/com.usbc-display.agent`, delete
       `~/Library/LaunchAgents/com.usbc-display.agent.plist` and the app, and reset permissions
       (`tccutil reset ScreenCapture com.usbc-display.sender`, same for `Accessibility`).
-- [ ] 4 setup windows opened and killed in a row: the Mac drops the oldest probe and still answers.
+- [ ] Four setup windows opened and killed in a row: the Mac drops the oldest probe and still answers.
+- [ ] A second Mac without the app on a set-up PC: the watcher opens setup at Connect, then Get.
 
-## Unverified (from the research critique)
-Each of these was assumed, not tested. Write down the answer.
-- [ ] Exact dialog wording on macOS 15, 26 and 27 (accessory, Not Opened, Open Anyway, password
-      box, Screen Recording, Accessibility, Background Items Added, Downloads folder, Mac firewall).
-- [ ] Whether the accessory prompt fires for a host-to-host link.
-- [ ] Mac-to-Windows networking on macOS 26.x (a January 2026 report says it failed on 26.2).
-- [ ] Whether `usbc.local` is answered and resolved (our own responder on UDP 5353, cable only).
-- [ ] Whether the built-in Windows "mDNS (UDP-In)" Public rule is on.
-- [ ] Whether port 80 is free with http.sys.
-- [x] Transparent WebView2 on a window without a redirection surface: its alpha reaches the desktop.
-- [ ] Quit & Reopen behaviour with the login agent.
-- [ ] Smart App Control behaviour for an unsigned setup exe.
-- [ ] Which Windows builds and vendors expose the USB4 P2P network adapter.
-- [ ] Where macOS places the virtual display by default.
+## Host behaviour checks (SPEC 10.5)
+- [ ] `localStorage` is never written (grep the UI for `localStorage` and `sessionStorage`: 0 hits).
+- [ ] HKCU values exist after each step: `SetupStarted` after Continue, `ElevationAsked` and
+      `ElevationResult` after the prompt, `AxChoice` after the keyboard offer, `LoginSkip` after
+      Not Now on the login item, `Scale`, `ColorManaged`, `Input` and `SetupDone` after the handover.
+- [ ] The prompt appears ≥ 3.0 s after Continue, from the downloaded copy, which is in front. With
+      No, there is no prompt on any later launch unless Try Again or Continue is clicked.
+- [ ] Input is off unless `axOk && axChoice != 'no'`: the receiver args contain `--no-input` otherwise.
+- [ ] The display doesn't sleep during a 20-minute idle setup session.
+- [ ] The watcher does nothing on a plug while setup is open. After `SetupDone` it starts the
+      display with no popup, and opens setup for a Mac without the app.
 
-## Also unverified (from building it)
+## Appendix B. Verify on hardware (the fallbacks are already written)
+
+| # | Verify | If it fails |
+|---|---|---|
+| V1 | OBK style 3 title y with no image (expected 358) | Adjust the picture variant's title, body and content y together |
+| V2 | Safari: does `usbc.local` open without `http://`? Does it show "Not Secure"? | Show `http://usbc.local` as the address; add the footnote (SPEC §8) |
+| V3 | Safari focus: the Not Opened alert blurs the page; Safari's sheets keep focus; System Settings blurs it; the Downloads popover doesn't | Tune the 0.8 s `leftForSettings` threshold; merge `safari-allow` into `open-anyway` if unreliable |
+| V4 | The accessory prompt on a computer-to-computer link, and its exact text | Drop the accessory sentence from `connect`; keep sheet `cable` |
+| V5 | The borderless Mac copy's shadow vs `MacShadow` (`SHOT_SHADOW=1`, and this PC's screen before and after the cut) | Retune `MacShadow.Dark` / `Light` |
+| V6 | `performWindowDragWithEvent` from a script message | Use `movableByWindowBackground` plus a transparent drag strip in the 32 pt band |
+| V7 | macOS 27 notarized open dialog text; the Open Anyway location and its confirmation | Update the `gk-open` and `gk-anyway` replicas word for word |
+| V8 | Safari's allow-downloads sheet text | Update `safari-allow-dl` |
+| V9 | Window owner names for the Touch ID and password dialogs | Adjust M4; the 6 s rule still prevents most flashes |
+| V10 | `AXIsProcessTrusted` turns true live in the agent; input reaches the Mac at the cut | Implement M7 |
+| V11 | Does the M6 "opened" ping trigger the Local Network prompt? | Keep it off (default) |
+| V12 | "Login Item Added" banner text and timing on 27.0.1 | Update `bg-items` and the `open-anyway` caption |
+| V13 | Does the self-relaunch leave "Quit & Reopen" hanging, and does clicking it still work? | Raise M2's delay to 6 s |
+| V14 | Windows' prompt from the downloaded copy right after the install: it comes to the front (the prompt is owned by the setup window), also for standard accounts | Also call `AllowSetForegroundWindow` and `SetForegroundWindow(self)` before asking |
+| V15 | Where the new display is placed, and whether `displaySide` arrives before `settled` | The edge-unknown copy is already written |
+| V16 | Inter in WebView2 vs WKWebView: identical line breaks at the cut | Fix `opsz`/`letter-spacing`; shorten any string that breaks differently |
+| V17 | Safari `AccentColor` reports the user accent | Send only `dark`; the accent comes from the Mac app at `allow-screen` |
+| V18 | `NSApp activate` makes the Mac copy key at the cut | The mirrored-active rule already hides it (and the host doesn't report "inactive" while handed over) |
+| V19 | Menu bar height on the virtual display (the 40 pt nudge) | Adjust `SetupWindow.MenuBar` (used by the window size and the handover place) |
+| V20 | Mac app firewall prompt and move-password frequency on un-notarized builds | If frequent, promote the sheet `open-anyway` tip 3 into the caption |
+
+**Already checked**
+- [x] Transparent WebView2 on a window without a redirection surface: its alpha reaches the
+      desktop (Oct 2026).
+- [x] The `http://169.254.x.x` address doesn't open on a Mac on Wi-Fi (Oct 2026): Safari's
+      request goes out over Wi-Fi. `usbc.local` did open, so it stays the address to type.
+- [x] The handover with Mac app 4: the window stays put and only the background changes; clicks
+      in the Mac's copy reach this PC's copy; Done closes the Mac's copy and the Mac desktop stays
+      (Oct 2026, 150 % on this PC).
+- [x] The Mac app moves itself to Applications from Downloads, clears Safari's download flags,
+      sets up its agent, and hands over to an installed copy (Mac app 3, macOS 27.0.1, Oct 2026).
+- [x] macOS 27.0.1 gives a borderless window the same shadow whether key or not
+      (design/research/borderless-shadow.md). `MacShadow` on this PC (150 %, captured from the
+      screen) matches that capture's Gaussian part within 1/255 from 2 pt outward (Oct 2026).
+
+**Still unverified (from building it)**
 - [ ] `netsh` accepts the link-local CIDR ranges in `remoteip`.
 - [ ] `schtasks` keeps the task's security descriptor (a standard user can run the task but not change it).
 - [ ] The firewall check through `HNetCfg.FwPolicy2` works in the .NET 8 single-file exe.
-- [ ] The USB4 adapter's interface type (if it's "wired LAN", the firewall rule can add `interfacetype=lan`).
-- [ ] WebView2: `app-region` drag, `offset-path`, `color-mix`, `:has()` on the installed runtime.
-- [ ] The handoff to the installed copy (window position kept, old window closes, mutex released).
-- [ ] Mac: the administrator `ditto --noqtn` fallback, closing inherited sockets on spawned
-      processes (port 48100 free after a relaunch).
+- [ ] Whether `usbc.local` is answered and resolved (our own responder on UDP 5353, cable only),
+      and whether the built-in Windows "mDNS (UDP-In)" rule clashes.
+- [ ] Which Windows builds and vendors expose the USB4 P2P network adapter.
+- [ ] A cloaked WebView2 window keeps rendering (the reveal waits for the page's `shown`).

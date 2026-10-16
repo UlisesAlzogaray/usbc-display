@@ -1,15 +1,21 @@
-// USB-C Display watcher (Windows). Starts at login and sits in the tray. Whenever the
-// Mac shows up on the USB-C cable it asks whether to use the cable as a screen or for
-// data; "screen" starts UsbcDisplay.exe, which exits by itself when the cable comes out.
+// USB-C Display watcher (Windows). Starts at login and sits in the tray.
 //
-// Built with the .NET Framework compiler that ships with Windows (build-watcher.cmd), so
-// it starts at login with no runtime setup. C# 5, because that's what that compiler takes.
+// Once setup has finished (SetupDone), connecting the cable to your Mac extends the Mac desktop
+// onto this PC at once, with the saved size, colours and input, and no popup (UsbcDisplay.exe,
+// which exits by itself when the cable comes out). If the Mac hasn't answered within 15 s (a
+// second Mac, a Mac without the app, or one that refuses because Screen Recording is off), it
+// opens USB-C Display Setup instead, which knows what to show. Before SetupDone, connecting the
+// cable opens setup. While setup is open (its mutex exists), a plug is left to setup.
+//
+// Tray menu: Show Mac Desktop (Stop Showing Mac Desktop while the display runs), Display
+// Options... (size, colours, keyboard and trackpad), Quit.
+//
+// Built with the .NET Framework compiler that ships with Windows (build-watcher.cmd), or by
+// tools/build-windows.sh, so it starts at login with no runtime setup. C# 5, because that's what
+// that compiler takes; non-ASCII characters are written as \u escapes for the same reason.
 //
 // usage: UsbcWatcher [--install | --uninstall]   (start at login, via HKCU\...\Run)
 //        UsbcWatcher --started-by-setup           (a cable that's already in isn't a new plug)
-//
-// Until setup has finished (SetupDone), plugging in opens USB-C Display Setup instead of the
-// popup: it guides both machines through the first connection.
 
 using System;
 using System.Collections.Generic;
@@ -18,6 +24,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.Net.NetworkInformation;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
@@ -27,22 +34,51 @@ static class Watcher
 {
     const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
     const string RunName = "USB-C Display";
-    const string SettingsKey = @"Software\USB-C Display";  // remembers the screen size you picked
+    const string SettingsKey = @"Software\USB-C Display";  // shared with the setup (windows/setup/Machine.cs Settings)
+    const string SetupMutex = @"Local\UsbcDisplaySetup";   // the setup's single-instance mutex (windows/setup/Program.cs)
+    const string SetupShowEvent = @"Local\UsbcDisplaySetupShow";  // and its "come forward" event (same file)
+    const string ReceiverClass = "UsbcDisplayWindow";      // the receiver's window class (windows/Program.cs CreateWindow)
+    const string SetupExe = "USB-C Display Setup.exe", ReceiverExe = "UsbcDisplay.exe";
+    const int ExitRefused = 3;                              // the receiver: the Mac can't record its screen
+    static readonly TimeSpan ConnectLimit = TimeSpan.FromSeconds(15);
     static readonly string AppDir = AppDomain.CurrentDomain.BaseDirectory;
-    const string SetupExe = "USB-C Display Setup.exe";
-    static readonly string LogPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"UsbcDisplay\receiver.log");
+    static readonly string LogDir = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "UsbcDisplay");
+
+    // Copy (windows/setup/ui/strings.js voice: "this PC", "your Mac").
+    const string Title = "USB-C Display";
+    const string ShowLabel = "Show Mac Desktop", StopLabel = "Stop Showing Mac Desktop";
+    const string OptionsLabel = "Display Options\u2026", QuitLabel = "Quit";
+    const string KeyboardNote = "To use this PC\u2019s keyboard and trackpad with your Mac, turn on USB-C Display in " +
+                                "System Settings > Privacy & Security > Device Control and Data Access on your Mac.";
+    const string KeepsStoppingNote = "The cable connection keeps stopping. Disconnect the cable, then connect it again.";
+    const string RestartingNote = "The cable connection stopped responding. USB-C Display is restarting it, which takes about half a minute.";
+    const string MissingFilesNote = "Some USB-C Display files are missing on this PC. Download USB-C Display Setup again, then open it.";
 
     static NotifyIcon tray;
-    static ChoiceForm prompt;
-    static Process receiver;
+    static ToolStripMenuItem showItem;
+    static ChoiceForm options;
     static StreamWriter log;
-    static bool linkUp, warned;
-    static volatile bool showing, needAccessibility;
+    static bool linkUp;
     static int downChecks;
+
+    // The display this watcher started (one the setup started is the setup's to watch).
+    static Process receiver;
     static DateTime receiverStarted;
+    static bool stopRequested, inputAsked, inputNoted;
+    static volatile bool connected, inputRefused;  // from its output, on a thread-pool thread
+    // Stop Showing Mac Desktop: closes politely, then ends what's left after 3 s.
+    static DateTime killAt = DateTime.MinValue;
+    // Display Options' Show Mac Desktop while a display runs: start again once it has stopped.
+    static bool restartPending;
+    static DateTime restartUntil;
+    static System.Windows.Forms.Timer quick;
 
     [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll")] static extern bool AllowSetForegroundWindow(int processId);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, string title);
+    [DllImport("user32.dll")] static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wp, IntPtr lp);
+    const uint WM_CLOSE = 0x0010;
 
     [STAThread]
     static int Main(string[] args)
@@ -65,21 +101,30 @@ static class Watcher
             SetProcessDPIAware();
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Directory.CreateDirectory(Path.GetDirectoryName(LogPath));
 
             var menu = new ContextMenuStrip();
-            menu.Items.Add("Use the Mac as a screen now", null, delegate { StartReceiver(SavedScale()); });
-            menu.Items.Add("Quit", null, delegate { Application.Exit(); });
-            tray = new NotifyIcon { Icon = MakeIcon(), Text = "USB-C Display", ContextMenuStrip = menu, Visible = true };
+            showItem = new ToolStripMenuItem(ShowLabel, null, delegate { ShowOrStop(); });
+            menu.Items.Add(showItem);
+            menu.Items.Add(new ToolStripMenuItem(OptionsLabel, null, delegate { ShowOptions(); }));
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(new ToolStripMenuItem(QuitLabel, null, delegate { Application.Exit(); }));
+            menu.Opening += delegate { UpdateMenu(); };
+            tray = new NotifyIcon { Icon = MakeIcon(), Text = Title, ContextMenuStrip = menu, Visible = true };
+            tray.MouseUp += delegate(object s, MouseEventArgs e) { if (e.Button == MouseButtons.Left) OpenTrayMenu(); };
 
-            if (args.Length > 0 && args[0] == "--started-by-setup") linkUp = CableUp();
+            bool bySetup = args.Length > 0 && args[0] == "--started-by-setup";
+            if (bySetup) linkUp = CableUp();
+            Note("watcher: start" + (bySetup ? " (by setup)" : "") + ", cable " + (CableUp() ? "connected" : "not connected"));
 
+            quick = new System.Windows.Forms.Timer { Interval = 200 };
+            quick.Tick += delegate { CheckRestart(); };
             var timer = new System.Windows.Forms.Timer { Interval = 1000 };
             timer.Tick += delegate { Check(); };
             timer.Start();
             Check();  // the cable may already be in at login
             Application.Run();
             tray.Visible = false;
+            Note("watcher: quit");
         }
         return 0;
     }
@@ -100,10 +145,49 @@ static class Watcher
     {
         get
         {
-            if (receiver != null && !receiver.HasExited) return true;
+            if (receiver != null)
+            {
+                try { if (!receiver.HasExited) return true; } catch { }
+            }
             var others = Process.GetProcessesByName("UsbcDisplay");
             foreach (var p in others) p.Dispose();
             return others.Length > 0;
+        }
+    }
+
+    // Setup is open (the downloaded copy or the installed one): it is in charge of the cable.
+    // Its mutex, or its "show" event, which every setup process keeps for its whole life: the
+    // downloaded copy releases the mutex a moment before the installed copy it hands over to
+    // takes it, but keeps the event until it closes. Handles are closed at once, so the setup's
+    // next start still creates the mutex itself.
+    static bool SetupOpen()
+    {
+        try
+        {
+            Mutex m;
+            if (Mutex.TryOpenExisting(SetupMutex, out m)) { m.Dispose(); return true; }
+        }
+        catch (UnauthorizedAccessException) { return true; }  // it exists
+        catch { }
+        try
+        {
+            EventWaitHandle e;
+            if (EventWaitHandle.TryOpenExisting(SetupShowEvent, out e)) { e.Dispose(); return true; }
+        }
+        catch (UnauthorizedAccessException) { return true; }
+        catch { }
+        return false;
+    }
+
+    static bool SetupDone
+    {
+        get
+        {
+            using (var k = Registry.CurrentUser.OpenSubKey(SettingsKey))
+            {
+                object v = k == null ? null : k.GetValue("SetupDone");
+                return v is int && (int)v != 0;
+            }
         }
     }
 
@@ -112,39 +196,393 @@ static class Watcher
         if (CableUp())
         {
             downChecks = 0;
-            // A link that comes back while the receiver runs is its own recovery, not a new plug.
-            if (!linkUp && !ReceiverRunning && prompt == null && !OpenSetup()) ShowPrompt();
-            linkUp = true;
+            if (!linkUp)
+            {
+                linkUp = true;
+                OnPlug();
+            }
             if (!ReceiverRunning) WatchForWedge();
         }
         else if (++downChecks >= 3)  // ignore blips
         {
-            // A link restart we started ourselves isn't a new plug: no popup when it comes back.
+            // A link restart started here isn't a new plug: nothing happens when it comes back.
             if (DateTime.UtcNow > quietUntil) linkUp = false;
-            if (prompt != null) prompt.Close();
+            macAddress = null;  // the next Mac may be another one
+            missedPings = 0;
         }
-
-        if (needAccessibility)
+        CheckReceiver();
+        if (killAt != DateTime.MinValue && DateTime.UtcNow >= killAt)
         {
-            needAccessibility = false;
-            tray.ShowBalloonTip(15000, "USB-C Display", "To use this laptop's trackpad and keyboard on the Mac, turn on usbc-display " +
-                "on the Mac under System Settings > Privacy & Security > Accessibility.", ToolTipIcon.Info);
-        }
-        // Only for a receiver started here: one the setup started is the setup's to watch (this
-        // never sees its output, so it would always look stuck).
-        if (receiver != null && !receiver.HasExited && !showing && !warned && DateTime.UtcNow - receiverStarted > TimeSpan.FromSeconds(20))
-        {
-            warned = true;
-            tray.ShowBalloonTip(10000, "USB-C Display", "Can't reach the Mac yet. Check that USB-C Display is running on the Mac " +
-                "and that it's allowed under Privacy & Security > Screen Recording.", ToolTipIcon.Warning);
+            killAt = DateTime.MinValue;
+            foreach (var p in Process.GetProcessesByName("UsbcDisplay"))
+            {
+                try { if (!p.HasExited) { Note("display: still running 3 s after Stop; ending it"); p.Kill(); } }
+                catch { }
+                finally { p.Dispose(); }
+            }
         }
     }
+
+    // The cable just came up, or was already in when this started at login.
+    static void OnPlug()
+    {
+        if (ReceiverRunning) return;  // a link that comes back while the display runs is its own recovery
+        if (SetupOpen())
+        {
+            Note("plug: setup is open, so it takes it from here");
+            return;
+        }
+        if (!SetupDone)
+        {
+            Note("plug: setup isn't done; opening it");
+            if (OpenSetup(false)) return;
+        }
+        Note("plug: showing the Mac desktop");
+        StartDisplay();
+    }
+
+    // Opens USB-C Display Setup, or brings the open one forward. Without force, only until setup
+    // has finished (SetupDone).
+    static bool OpenSetup(bool force)
+    {
+        if (!force && SetupDone) return false;
+        string setup = Path.Combine(AppDir, SetupExe);
+        if (!File.Exists(setup)) return false;
+        try
+        {
+            using (Process.Start(new ProcessStartInfo(setup) { UseShellExecute = false, WorkingDirectory = AppDir })) { }
+            Note("setup: opened" + (force ? " (after setup was done)" : ""));
+            return true;
+        }
+        catch (Exception e)
+        {
+            Note("setup: can't open: " + e.Message);
+            return false;
+        }
+    }
+
+    // The automatic fallbacks never bring an open setup forward: it's already showing what to do.
+    static void OpenSetupUnlessOpen()
+    {
+        if (!SetupOpen()) OpenSetup(true);
+    }
+
+    // ---- The display ----
+
+    static void UpdateMenu()
+    {
+        showItem.Text = ReceiverRunning ? StopLabel : ShowLabel;
+    }
+
+    static void ShowOrStop()
+    {
+        if (ReceiverRunning) StopDisplay();
+        else StartDisplay();
+    }
+
+    static void StartDisplay()
+    {
+        if (ReceiverRunning) return;
+        if (!CableUp() && OpenSetup(true)) return;  // no cable yet: setup shows how to connect your Mac
+        StartReceiver();
+    }
+
+    // Closes the display the way Ctrl-Alt-Esc does (its window closes and it quits), whoever
+    // started it; anything still running 3 s later is ended (Check).
+    static void StopDisplay()
+    {
+        stopRequested = true;
+        int n = 0;
+        for (IntPtr w = FindWindowEx(IntPtr.Zero, IntPtr.Zero, ReceiverClass, null); w != IntPtr.Zero;
+             w = FindWindowEx(IntPtr.Zero, w, ReceiverClass, null))
+        {
+            PostMessage(w, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+            n++;
+        }
+        Note("display: stop (" + n + " window" + (n == 1 ? "" : "s") + ")");
+        killAt = DateTime.UtcNow.AddSeconds(3);
+    }
+
+    static void StartReceiver()
+    {
+        if (ReceiverRunning) return;
+        string exe = Path.Combine(AppDir, ReceiverExe);
+        if (!File.Exists(exe))
+        {
+            Note("display: " + exe + " is missing");
+            MissingFiles();
+            return;
+        }
+        bool input = SavedInput();
+        string args = "--exit-when-unplugged --scale " + SavedScale() + (SavedColorManaged() ? "" : " --no-color-profile") +
+                      (input ? "" : " --no-input");
+        // The display should have the keyboard as soon as it shows (this works when the start
+        // came from a click in the tray menu; on a plug the receiver takes the foreground itself).
+        AllowSetForegroundWindow(-1);
+        var psi = new ProcessStartInfo(exe, args)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            WorkingDirectory = AppDir,
+        };
+        // A framework-dependent UsbcDisplay (a development build) uses the SDK in the home folder;
+        // the installed one is self-contained and needs nothing.
+        if (FrameworkDependent(psi.FileName))
+            psi.EnvironmentVariables["DOTNET_ROOT"] = Environment.ExpandEnvironmentVariables(@"%USERPROFILE%\.dotnet-sdk");
+
+        connected = inputRefused = false;
+        stopRequested = inputNoted = false;
+        inputAsked = input;
+        killAt = DateTime.MinValue;
+        receiverStarted = DateTime.UtcNow;
+        CloseLog();
+        try
+        {
+            Directory.CreateDirectory(LogDir);
+            log = new StreamWriter(Path.Combine(LogDir, "receiver.log"), false) { AutoFlush = true };
+        }
+        catch { log = null; }
+        var p = new Process { StartInfo = psi };
+        DataReceivedEventHandler onLine = delegate(object s, DataReceivedEventArgs e)
+        {
+            if (e.Data == null) return;
+            if (e.Data.StartsWith("Connected to")) connected = true;
+            if (e.Data.StartsWith("Input: not allowed")) inputRefused = true;  // noted from the UI thread (CheckReceiver)
+            var l = log;
+            if (l != null) lock (l) { try { l.WriteLine(e.Data); } catch { } }
+        };
+        p.OutputDataReceived += onLine;
+        p.ErrorDataReceived += onLine;
+        try
+        {
+            p.Start();
+            p.BeginOutputReadLine();
+            p.BeginErrorReadLine();
+            receiver = p;
+            Note("display: started " + ReceiverExe + " " + args);
+        }
+        catch (Exception e)
+        {
+            p.Dispose();
+            Note("display: can't start: " + e.Message);
+            MissingFiles();
+        }
+    }
+
+    static void MissingFiles()
+    {
+        // Setup's Ready screen explains it and how to fix it; without setup, a note in the tray.
+        if (!OpenSetup(true)) tray.ShowBalloonTip(15000, Title, MissingFilesNote, ToolTipIcon.Warning);
+    }
+
+    static void CloseLog()
+    {
+        var l = log;
+        log = null;
+        if (l != null) lock (l) { try { l.Dispose(); } catch { } }
+    }
+
+    // Once a second: how the display this watcher started is doing.
+    static void CheckReceiver()
+    {
+        var p = receiver;
+        if (p == null) return;
+        bool exited;
+        try { exited = p.HasExited; } catch { exited = true; }
+        if (exited)
+        {
+            int code = -1;
+            try { p.WaitForExit(500); code = p.ExitCode; } catch { }  // its last lines
+            receiver = null;
+            p.Dispose();
+            CloseLog();
+            Note("display: ended, exit code " + code + (connected ? "" : ", never reached your Mac"));
+            if (stopRequested) return;
+            if (code == ExitRefused) OpenSetupUnlessOpen();               // Screen Recording is off: setup shows how to turn it on
+            else if (!connected && CableUp()) OpenSetupUnlessOpen();      // it gave up without reaching your Mac
+            return;
+        }
+        if (inputRefused && inputAsked && !inputNoted)
+        {
+            inputNoted = true;  // once per start
+            tray.ShowBalloonTip(15000, Title, KeyboardNote, ToolTipIcon.Info);
+        }
+        if (!connected && !stopRequested && DateTime.UtcNow - receiverStarted >= ConnectLimit)
+        {
+            // A second Mac, a Mac without the app, or one that's asleep: setup knows what to show.
+            Note("display: no answer from your Mac in 15 s; opening setup");
+            stopRequested = true;
+            try { p.Kill(); } catch { }
+            if (CableUp()) OpenSetupUnlessOpen();
+        }
+    }
+
+    static bool FrameworkDependent(string exe)
+    {
+        try
+        {
+            string config = Path.ChangeExtension(exe, ".runtimeconfig.json");
+            return File.Exists(config) && File.ReadAllText(config).Contains("\"framework");
+        }
+        catch { return false; }
+    }
+
+    // ---- Display Options ----
+
+    static void ShowOptions()
+    {
+        if (options != null)
+        {
+            options.Activate();
+            return;
+        }
+        int recommended;
+        Size native;
+        var choices = ScaleChoices(out recommended, out native);
+        options = new ChoiceForm(choices, SavedScale(), native, SavedColorManaged(), SavedInput());
+        options.FormClosed += delegate
+        {
+            var f = options;
+            options = null;
+            if (!f.Accepted) return;
+            try
+            {
+                using (var k = Registry.CurrentUser.CreateSubKey(SettingsKey))
+                {
+                    k.SetValue("Scale", f.ChosenScale, RegistryValueKind.DWord);
+                    k.SetValue("ColorManaged", f.ColorManaged ? 1 : 0, RegistryValueKind.DWord);
+                    k.SetValue("Input", f.UseInput ? 1 : 0, RegistryValueKind.DWord);
+                }
+            }
+            catch (Exception e) { Note("options: can't save: " + e.Message); }
+            Note("options: scale " + f.ChosenScale + ", colours " + (f.ColorManaged ? "on" : "off") + ", input " + (f.UseInput ? "on" : "off"));
+            if (ReceiverRunning)
+            {
+                // The new size needs a new display: stop this one, then start again (CheckRestart).
+                StopDisplay();
+                restartPending = true;
+                restartUntil = DateTime.UtcNow.AddSeconds(6);
+                quick.Start();
+            }
+            else StartDisplay();
+        };
+        options.Show();
+        options.Activate();
+    }
+
+    static void CheckRestart()
+    {
+        if (!restartPending) { quick.Stop(); return; }
+        if (!ReceiverRunning)
+        {
+            restartPending = false;
+            quick.Stop();
+            StartDisplay();
+        }
+        else if (DateTime.UtcNow > restartUntil)
+        {
+            restartPending = false;
+            quick.Stop();
+            Note("options: the display didn't stop; not restarting it");
+        }
+    }
+
+    // ---- Saved settings (HKCU\Software\USB-C Display, as the setup writes them) ----
+
+    static int? SavedInt(string name)
+    {
+        try
+        {
+            using (var k = Registry.CurrentUser.OpenSubKey(SettingsKey))
+            {
+                object v = k == null ? null : k.GetValue(name);
+                if (v is int) return (int)v;
+                return null;
+            }
+        }
+        catch { return null; }
+    }
+
+    // The saved size, else the one setup recommends (the same size as on a MacBook).
+    static int SavedScale()
+    {
+        int? v = SavedInt("Scale");
+        if (v.HasValue && v.Value >= 100 && v.Value <= 300) return v.Value;
+        int recommended;
+        Size native;
+        ScaleChoices(out recommended, out native);
+        return recommended;
+    }
+
+    static bool SavedColorManaged()
+    {
+        int? v = SavedInt("ColorManaged");
+        return !v.HasValue || v.Value != 0;  // on unless turned off
+    }
+
+    static bool SavedInput()
+    {
+        int? v = SavedInt("Input");
+        return v.HasValue && v.Value != 0;  // off unless setup (or Display Options) turned it on
+    }
+
+    // ---- Display sizes, computed as the setup does (windows/setup/Machine.cs ScaleOptions) ----
+    // "Default" is the same size as on a MacBook: the panel's real pixels per inch (from its
+    // EDID) against the ~129 points per inch a MacBook shows. Without it, Windows' own scaling.
+
+    [StructLayout(LayoutKind.Sequential)] struct POINT { public int X, Y; }
+    [StructLayout(LayoutKind.Sequential)] struct RECT { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)] struct MONITORINFO { public int Size; public RECT Monitor, Work; public uint Flags; }
+    [DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(POINT pt, uint flags);
+    [DllImport("user32.dll")] static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
+    [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr monitor, int type, out uint dpiX, out uint dpiY);
+    [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+
+    public static List<KeyValuePair<int, string>> ScaleChoices(out int recommended, out Size native)
+    {
+        int eff = 96, raw = 0;
+        native = Screen.PrimaryScreen.Bounds.Size;
+        IntPtr old = IntPtr.Zero;
+        try { old = SetThreadDpiAwarenessContext(new IntPtr(-4)); } catch { }  // per-monitor v2: real pixels, current scaling
+        try
+        {
+            var p = new POINT();
+            IntPtr m = MonitorFromPoint(p, 1 /*MONITOR_DEFAULTTOPRIMARY*/);
+            var mi = new MONITORINFO { Size = Marshal.SizeOf(typeof(MONITORINFO)) };
+            if (GetMonitorInfo(m, ref mi)) native = new Size(mi.Monitor.Right - mi.Monitor.Left, mi.Monitor.Bottom - mi.Monitor.Top);
+            uint x, y;
+            if (GetDpiForMonitor(m, 0 /*MDT_EFFECTIVE_DPI*/, out x, out y) == 0) eff = (int)x;
+            if (GetDpiForMonitor(m, 2 /*MDT_RAW_DPI*/, out x, out y) == 0) raw = (int)x;
+        }
+        catch { }
+        finally
+        {
+            try { if (old != IntPtr.Zero) SetThreadDpiAwarenessContext(old); } catch { }
+        }
+
+        int windows = Clamp((int)Math.Round(eff * 100.0 / 96), 100, 300);
+        int same = raw >= 90 && raw <= 600 ? Clamp((int)Math.Round(raw * 100.0 / 129 / 5) * 5, 100, 200) : 0;
+        recommended = same > 0 ? same : windows > 100 && windows < 200 ? windows : 100;
+
+        var list = new List<KeyValuePair<int, string>>();
+        list.Add(new KeyValuePair<int, string>(recommended, "Default"));
+        if (windows > recommended && windows < 200) list.Add(new KeyValuePair<int, string>(windows, "Larger Text"));
+        if (recommended > 100) list.Add(new KeyValuePair<int, string>(100, "More Space"));
+        if (recommended < 200) list.Add(new KeyValuePair<int, string>(200, "Largest Text"));
+        // By size, as macOS lists them: the largest text first, More Space last.
+        list.Sort((a, b) => b.Key.CompareTo(a.Key));
+        return list;
+    }
+
+    static int Clamp(int v, int min, int max) { return v < min ? min : v > max ? max : v; }
 
     // ---- The cable as a plain network link ----
     // Large copies from the Mac (Finder file sharing and the like) go out as bundled packets the
     // Windows USB4 driver can choke on: the link then stays "up" but nothing gets through. The
-    // screen receiver avoids those packets and restarts the link itself; when it isn't running,
-    // this does: if the Mac stops answering pings although the cable is still connected, the
+    // display avoids those packets and restarts the link itself; when it isn't running, this
+    // does: if the Mac stops answering pings although the cable is still connected, the
     // registered task restarts the link (no permission prompt), at most twice in 10 minutes.
     const string RecoveryTask = @"\USB-C Display\Restart USB4 link";
     static string macAddress;      // the Mac's link-local address on the cable, once seen
@@ -168,7 +606,8 @@ static class Watcher
         resets.RemoveAll(t => DateTime.UtcNow - t > TimeSpan.FromMinutes(10));
         if (resets.Count >= 2)
         {
-            tray.ShowBalloonTip(10000, "USB-C Display", "The USB-C link keeps stopping. Unplug the cable and plug it back in.", ToolTipIcon.Warning);
+            Note("link: stopped again; asking to reconnect the cable");
+            tray.ShowBalloonTip(10000, Title, KeepsStoppingNote, ToolTipIcon.Warning);
             quietUntil = DateTime.UtcNow.AddMinutes(10);
             return;
         }
@@ -176,10 +615,10 @@ static class Watcher
         quietUntil = DateTime.UtcNow.AddSeconds(150);
         try
         {
+            Note("link: your Mac stopped answering on a connected cable; restarting the link");
             using (var p = Process.Start(new ProcessStartInfo("schtasks.exe", "/run /tn \"" + RecoveryTask + "\"") { UseShellExecute = false, CreateNoWindow = true }))
                 p.WaitForExit(10000);
-            tray.ShowBalloonTip(10000, "USB-C Display", "The USB-C link stopped passing data (a Windows USB4 driver problem). " +
-                "Restarting it; it's back in about half a minute. Copies that were running need starting again.", ToolTipIcon.Info);
+            tray.ShowBalloonTip(10000, Title, RestartingNote, ToolTipIcon.Info);
         }
         catch { }
     }
@@ -217,139 +656,20 @@ static class Watcher
         }
     }
 
-    // Windows' scaling for this screen, in percent (150 on this laptop).
-    static int SystemScale()
-    {
-        using (var g = Graphics.FromHwnd(IntPtr.Zero)) return (int)Math.Round(g.DpiX * 100 / 96);
-    }
+    // ---- Tray ----
 
-    static int SavedScale()
-    {
-        using (var k = Registry.CurrentUser.OpenSubKey(SettingsKey))
-        {
-            object v = k == null ? null : k.GetValue("Scale");
-            return v is int ? (int)v : 125;  // same size as on the MacBook
-        }
-    }
-
-    static bool SavedColorManaged()
-    {
-        using (var k = Registry.CurrentUser.OpenSubKey(SettingsKey))
-        {
-            object v = k == null ? null : k.GetValue("ColorManaged");
-            return !(v is int) || (int)v != 0;
-        }
-    }
-
-    static bool SavedFlag(string name)
-    {
-        using (var k = Registry.CurrentUser.OpenSubKey(SettingsKey))
-        {
-            object v = k == null ? null : k.GetValue(name);
-            return !(v is int) || (int)v != 0;  // on unless turned off
-        }
-    }
-
-    // Before setup has finished, a plug-in opens the setup app (or brings it forward).
-    static bool OpenSetup()
-    {
-        using (var k = Registry.CurrentUser.OpenSubKey(SettingsKey))
-        {
-            object v = k == null ? null : k.GetValue("SetupDone");
-            if (v is int && (int)v != 0) return false;
-        }
-        string setup = Path.Combine(AppDir, SetupExe);
-        if (!File.Exists(setup)) return false;
-        try
-        {
-            using (Process.Start(new ProcessStartInfo(setup) { UseShellExecute = false, WorkingDirectory = AppDir })) { }
-            return true;
-        }
-        catch { return false; }
-    }
-
-    static void ShowPrompt()
-    {
-        prompt = new ChoiceForm(SavedScale(), SystemScale(), Screen.PrimaryScreen.Bounds.Size, SavedColorManaged(), SavedFlag("Input"));
-        prompt.FormClosed += delegate
-        {
-            bool screen = prompt.UseAsScreen;
-            int scale = prompt.ChosenScale;
-            bool color = prompt.ColorManaged, input = prompt.UseInput;
-            prompt = null;
-            if (!screen) return;
-            using (var k = Registry.CurrentUser.CreateSubKey(SettingsKey))
-            {
-                k.SetValue("Scale", scale, RegistryValueKind.DWord);
-                k.SetValue("ColorManaged", color ? 1 : 0, RegistryValueKind.DWord);
-                k.SetValue("Input", input ? 1 : 0, RegistryValueKind.DWord);
-            }
-            StartReceiver(scale);
-        };
-        prompt.Show();
-        prompt.Activate();
-    }
-
-    [DllImport("user32.dll")] static extern bool AllowSetForegroundWindow(int processId);
-
-    static void StartReceiver(int scale)
-    {
-        if (ReceiverRunning) return;
-        string args = "--exit-when-unplugged --scale " + scale + (SavedColorManaged() ? "" : " --no-color-profile") +
-                      (SavedFlag("Input") ? "" : " --no-input");
-        // The screen should have the keyboard as soon as it shows (you just clicked here).
-        AllowSetForegroundWindow(-1);
-        var psi = new ProcessStartInfo(Path.Combine(AppDir, "UsbcDisplay.exe"), args)
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            WorkingDirectory = AppDir,
-        };
-        // A framework-dependent UsbcDisplay (a development build) uses the SDK in the home folder;
-        // the installed one is self-contained and needs nothing.
-        if (FrameworkDependent(psi.FileName))
-            psi.EnvironmentVariables["DOTNET_ROOT"] = Environment.ExpandEnvironmentVariables(@"%USERPROFILE%\.dotnet-sdk");
-
-        showing = warned = false;
-        receiverStarted = DateTime.UtcNow;
-        try { log = new StreamWriter(LogPath, false) { AutoFlush = true }; } catch { log = null; }
-        receiver = new Process { StartInfo = psi };
-        DataReceivedEventHandler onLine = delegate(object s, DataReceivedEventArgs e)
-        {
-            if (e.Data == null) return;
-            if (e.Data.StartsWith("Showing")) showing = true;
-            if (e.Data.StartsWith("Mac: allow")) needAccessibility = true;  // shown from the UI thread (Check)
-            var l = log;
-            if (l != null) lock (l) { try { l.WriteLine(e.Data); } catch { } }
-        };
-        receiver.OutputDataReceived += onLine;
-        receiver.ErrorDataReceived += onLine;
-        try
-        {
-            receiver.Start();
-            receiver.BeginOutputReadLine();
-            receiver.BeginErrorReadLine();
-        }
-        catch (Exception e)
-        {
-            receiver = null;
-            MessageBox.Show("Could not start the screen receiver:\n" + e.Message, "USB-C Display", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
-    }
-
-    static bool FrameworkDependent(string exe)
+    // A left click opens the same menu as a right click (NotifyIcon only does that for the right).
+    static void OpenTrayMenu()
     {
         try
         {
-            string config = Path.ChangeExtension(exe, ".runtimeconfig.json");
-            return File.Exists(config) && File.ReadAllText(config).Contains("\"framework");
+            var show = typeof(NotifyIcon).GetMethod("ShowContextMenu", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (show != null) show.Invoke(tray, null);
         }
-        catch { return false; }
+        catch { }
     }
 
-    // A small blue monitor, readable on light and dark taskbars.
+    // A small monitor, readable on light and dark taskbars (our own drawing).
     static Icon MakeIcon()
     {
         var bmp = new Bitmap(32, 32);
@@ -367,134 +687,188 @@ static class Watcher
         }
         return Icon.FromHandle(bmp.GetHicon());
     }
+
+    // A plain log for when something goes wrong on a real PC, next to the setup's and the
+    // receiver's (%LOCALAPPDATA%\UsbcDisplay\watcher.log).
+    static bool noteStarted;
+
+    static void Note(string line)
+    {
+        try
+        {
+            Directory.CreateDirectory(LogDir);
+            string path = Path.Combine(LogDir, "watcher.log");
+            if (!noteStarted)
+            {
+                noteStarted = true;
+                if (File.Exists(path) && new FileInfo(path).Length > (1 << 20)) File.Delete(path);
+            }
+            File.AppendAllText(path, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " [" + Process.GetCurrentProcess().Id + "] " + line + "\r\n");
+        }
+        catch { }
+    }
 }
 
+// Display Options, from the tray menu: how your Mac desktop looks on this PC. A small, plain
+// Windows dialog; Show Mac Desktop saves the choices and (re)starts the display with them.
 sealed class ChoiceForm : Form
 {
-    public bool UseAsScreen, ColorManaged, UseInput;
-    public int ChosenScale;  // what to tell the Mac: 100 = 1:1 pixels, 200 = exactly 2x, else scaled like Windows
+    public bool Accepted, ColorManaged, UseInput;
+    public int ChosenScale;
     readonly List<KeyValuePair<RadioButton, int>> sizes = new List<KeyValuePair<RadioButton, int>>();
 
-    public ChoiceForm(int current, int systemScale, Size native, bool colorManaged, bool useInput)
+    // Layout in 96-DPI pixels; AutoScaleMode.Dpi scales it to the screen like the fonts.
+    const int Width0 = 400, Margin0 = 24, DetailX = 196, Row = 28, FooterHeight = 64;
+
+    public ChoiceForm(List<KeyValuePair<int, string>> choices, int current, Size native, bool colorManaged, bool useInput)
     {
         SuspendLayout();
         Text = "USB-C Display";
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = MinimizeBox = false;
         ShowIcon = false;
-        TopMost = true;
+        TopMost = true;  // opened from the tray: it must not open behind other windows
         StartPosition = FormStartPosition.CenterScreen;
-        Font = new Font("Segoe UI", 10f);
+        BackColor = SystemColors.Window;
+        Font = new Font("Segoe UI", 9.75f);
 
-        // Screen sizes for the Mac's display. macOS draws everything but 1:1 at 2x (Retina) and
-        // the picture is then fitted to this panel, like the MacBook's own default mode.
-        // A MacBook Air shows about 129 points per inch; this 14" 1920x1200 panel has 162 pixels
-        // per inch, so 125% gives the same physical size as on the Mac.
-        int w = native.Width, h = native.Height, sys = Math.Max(systemScale, 100);
-        AddSize(125, "Same size as on the MacBook", LooksLike(native, 125) + " (recommended)", current);
-        if (sys != 125 && sys != 100 && sys != 200) AddSize(sys, "Larger text", LooksLike(native, sys) + ", like Windows here", current);
-        AddSize(100, "More space", w + "×" + h + ", drawn at 1x, not Retina: thinner text", current);
-        AddSize(200, "Largest", LooksLike(native, 200) + ", exactly 2x", current);
-        bool anyChecked = false;
-        foreach (var s in sizes) anyChecked |= s.Key.Checked;
-        if (!anyChecked) sizes[0].Key.Checked = true;  // e.g. Windows' scaling changed since
-
-        var sizeLabel = new Label { Text = "Screen size", Font = new Font("Segoe UI Semibold", 10f), AutoSize = true, Location = new Point(20, 194) };
-        Controls.Add(sizeLabel);
-        for (int i = 0; i < sizes.Count; i++)
+        var heading = new Label
         {
-            sizes[i].Key.Location = new Point(24, 222 + i * 28);
-            Controls.Add(sizes[i].Key);
-        }
-        // macOS colour-manages its own screen; with this it does the same for this panel.
-        var color = new CheckBox
-        {
-            Text = "Match colours to this screen (uses its factory colour profile)",
+            Text = "Display Options",
+            Font = new Font("Segoe UI Semibold", 15f),
             AutoSize = true,
-            Checked = colorManaged,
-            Location = new Point(22, 232 + sizes.Count * 28),
+            Location = new Point(Margin0 - 3, 18),
         };
-        Controls.Add(color);
-        var input = new CheckBox
+        var subheading = new Label
         {
-            Text = "Use this laptop's trackpad and keyboard on the Mac (Alt is ⌘, Windows key is ⌥)",
-            AutoSize = true,
-            Checked = useInput,
-            Location = new Point(22, 260 + sizes.Count * 28),
-        };
-        Controls.Add(input);
-        ClientSize = new Size(560, 296 + sizes.Count * 28);
-
-        var title = new Label
-        {
-            Text = "Your Mac is connected over USB-C",
-            Font = new Font("Segoe UI Semibold", 13f),
-            AutoSize = true,
-            Location = new Point(20, 16),
-        };
-        var subtitle = new Label
-        {
-            Text = "How do you want to use this connection?",
+            Text = "Choose how your Mac desktop looks on this PC.",
             ForeColor = SystemColors.GrayText,
             AutoSize = true,
-            Location = new Point(21, 50),
+            Location = new Point(Margin0 - 1, 54),
         };
-        var screen = MakeButton("Use as a screen", new Point(20, 88));
-        screen.Click += delegate
+        var sizeLabel = new Label
+        {
+            Text = "Display Size",
+            Font = new Font("Segoe UI Semibold", 9.75f),
+            AutoSize = true,
+            Location = new Point(Margin0 - 1, 92),
+        };
+        Controls.AddRange(new Control[] { heading, subheading, sizeLabel });
+
+        int y = 116;
+        RadioButton def = null;  // the Default size (the list runs by size, so it isn't always first)
+        foreach (var c in choices)
+        {
+            string detail = "Looks like " + native.Width * 100 / c.Key + " \u00D7 " + native.Height * 100 / c.Key;
+            var r = new RadioButton
+            {
+                Text = c.Value,
+                AutoSize = false,
+                Size = new Size(DetailX - Margin0, 24),
+                CheckAlign = ContentAlignment.MiddleLeft,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Location = new Point(Margin0, y),
+                Checked = c.Key == current,
+                AccessibleDescription = detail,
+            };
+            var d = new Label
+            {
+                Text = detail,
+                ForeColor = SystemColors.GrayText,
+                AutoSize = false,
+                Size = new Size(Width0 - Margin0 - DetailX, 24),
+                TextAlign = ContentAlignment.MiddleLeft,
+                Location = new Point(DetailX, y),
+            };
+            var radio = r;
+            d.Click += delegate { radio.Checked = true; radio.Focus(); };
+            sizes.Add(new KeyValuePair<RadioButton, int>(r, c.Key));
+            if (c.Value == "Default") def = r;
+            Controls.Add(r);
+            Controls.Add(d);
+            y += Row;
+        }
+        bool anyChecked = false;
+        foreach (var s in sizes) anyChecked |= s.Key.Checked;
+        if (!anyChecked && sizes.Count > 0) (def ?? sizes[0].Key).Checked = true;  // e.g. Windows' scaling changed since
+
+        y += 14;
+        var color = new CheckBox
+        {
+            Text = "Match colors with your Mac",
+            AutoSize = true,
+            Checked = colorManaged,
+            Location = new Point(Margin0, y),
+        };
+        y += Row;
+        var input = new CheckBox
+        {
+            Text = "Use this PC\u2019s keyboard and trackpad with your Mac",
+            AutoSize = true,
+            Checked = useInput,
+            Location = new Point(Margin0, y),
+        };
+        y += Row + 10;
+        Controls.Add(color);
+        Controls.Add(input);
+
+        // The button row, on the grey band Windows dialogs use, primary first.
+        var footer = new Panel
+        {
+            BackColor = SystemColors.Control,
+            Location = new Point(0, y),
+            Size = new Size(Width0, FooterHeight),
+        };
+        footer.Paint += delegate(object s, PaintEventArgs e)
+        {
+            using (var line = new Pen(SystemColors.ControlLight)) e.Graphics.DrawLine(line, 0, 0, footer.Width, 0);
+        };
+        var cancel = new Button
+        {
+            Text = "Cancel",
+            Size = new Size(100, 32),
+            Location = new Point(Width0 - Margin0 - 100, (FooterHeight - 32) / 2),
+            UseVisualStyleBackColor = true,
+            DialogResult = DialogResult.Cancel,
+        };
+        var show = new Button
+        {
+            Text = "Show Mac Desktop",
+            Size = new Size(148, 32),
+            Location = new Point(cancel.Left - 8 - 148, (FooterHeight - 32) / 2),
+            UseVisualStyleBackColor = true,
+        };
+        show.Click += delegate
         {
             foreach (var s in sizes) if (s.Key.Checked) ChosenScale = s.Value;
             ColorManaged = color.Checked;
             UseInput = input.Checked;
-            UseAsScreen = true;
+            Accepted = true;
             Close();
         };
-        var data = MakeButton("Data transfer", new Point(234, 88));
-        data.Click += delegate { Close(); };
-        Controls.AddRange(new Control[] {
-            title, subtitle,
-            screen, MakeNote("Show the Mac's extra display on this laptop", new Point(20, 140)),
-            data, MakeNote("Keep the cable as a plain network link", new Point(234, 140)),
-        });
-        AcceptButton = screen;
-        CancelButton = data;  // Esc
-        // Sizes above are 96-DPI pixels; scale them to the screen like the fonts already are.
+        cancel.Click += delegate { Close(); };
+        footer.Controls.Add(show);
+        footer.Controls.Add(cancel);
+        Controls.Add(footer);
+        ClientSize = new Size(Width0, y + FooterHeight);
+
+        // Tab order: sizes, the two options, then the buttons.
+        int tab = 0;
+        foreach (Control c in Controls) c.TabIndex = tab++;
+        show.TabIndex = 0;
+        cancel.TabIndex = 1;
+        AcceptButton = show;    // Return
+        CancelButton = cancel;  // Esc
         AutoScaleDimensions = new SizeF(96f, 96f);
         AutoScaleMode = AutoScaleMode.Dpi;
         ResumeLayout(false);
+        PerformLayout();
     }
 
-    public static string LooksLike(Size native, int scale)
+    // The selected size has the focus when the dialog opens, as in a Windows dialog.
+    protected override void OnShown(EventArgs e)
     {
-        return "looks like " + native.Width * 100 / scale + "×" + native.Height * 100 / scale;
-    }
-
-    void AddSize(int scale, string name, string detail, int current)
-    {
-        var r = new RadioButton { Text = name + ": " + detail, AutoSize = true, Checked = scale == current };
-        sizes.Add(new KeyValuePair<RadioButton, int>(r, scale));
-    }
-
-    static Button MakeButton(string label, Point at)
-    {
-        return new Button
-        {
-            Text = label,
-            Font = new Font("Segoe UI Semibold", 11f),
-            Location = at,
-            Size = new Size(198, 46),
-            UseVisualStyleBackColor = true,
-        };
-    }
-
-    static Label MakeNote(string text, Point at)
-    {
-        return new Label
-        {
-            Text = text,
-            ForeColor = SystemColors.GrayText,
-            Location = at,
-            Size = new Size(198, 44),
-            TextAlign = ContentAlignment.TopCenter,
-        };
+        base.OnShown(e);
+        foreach (var s in sizes) if (s.Key.Checked) { s.Key.Focus(); break; }
     }
 }

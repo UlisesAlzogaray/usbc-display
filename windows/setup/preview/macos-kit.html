@@ -1,37 +1,47 @@
 <!doctype html>
-<html lang="en" class="preview">
+<html lang="en" class="preview kit">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Mac screens kit</title>
-<!-- Every D.scenes.mac variant, side by side in the Mac's Dark and Light
-     appearance and another accent, inside the wizard's own stage frame.
-     Query: ?only=name1,name2  ?f=0.5 (freeze every loop at that fraction)
-     ?poster=1 (freeze at each scene's poster frame)  ?k=1.5 (scale)
-     ?theme=dark|light (the wizard's theme)  ?cols=dark:purple,light:purple,dark:blue -->
-<link rel="stylesheet" href="../ui/styles.css">
+<title>Mac Scenes Kit</title>
+<!-- Preview only. Every D.scenes.mac picture in band framing (SPEC §3.0.3, §6.3): the 800 x 300 pt
+     crop the setup window shows, hosted as app.js hosts it (.band-canvas, played by D.playScene).
+     Rows are scenes, columns are looks.
+       ?scene=a,b        only these scenes (one scene: drawn at full size, k=1)
+       ?cols=dark:purple,light:purple,dark:blue,light:blue   the looks (appearance:accent)
+       ?k=0.5            the band's scale (1 = 800 x 300 CSS px)
+       ?f=0.3            freeze every loop at that fraction;  ?poster=1  at each scene's poster
+       ?still=1 ?off=1   the scenes' still and switch-off variants
+       ?host= ?size= ?version= ?notarized=1   the scenes' live parameters
+       ?theme=light|dark this page's own background -->
 <link rel="stylesheet" href="../ui/scenes.css">
 <link rel="stylesheet" href="../ui/macos.css">
 <style>
-  html, body { height: auto; overflow: auto; }
-  body { padding: 20px 24px 40px; }
-  .kit-h1 { font: 600 20px/28px var(--font-display); margin: 0 0 4px; }
-  .kit-sub { color: var(--text-2); margin: 0 0 18px; }
-  .kit-grid { display: grid; grid-template-columns: 150px repeat(var(--n), auto); gap: 14px 16px; align-items: center; justify-content: start; }
-  .kit-colh { font-weight: 600; color: var(--text-2); }
-  .kit-name { font: 600 13px/18px var(--font); }
-  .kit-name small { display: block; font-weight: 400; color: var(--text-3); }
-  .kit-cell .stage { width: calc(400px * var(--kk) + 8px); height: calc(250px * var(--kk) + 48px); max-height: none; aspect-ratio: auto; }
-  #err { white-space: pre-wrap; color: #ff6b6b; font: 12px/16px monospace; }
+  :root { color-scheme: light dark; --kbg: #ececec; --ktx: #1d1d1f; --kmuted: #6e6e73; --kline: rgba(0, 0, 0, .18); }
+  :root[data-theme="dark"] { --kbg: #161616; --ktx: #f2f2f2; --kmuted: #9a9a9a; --kline: rgba(255, 255, 255, .18); }
+  html, body { margin: 0; background: var(--kbg); color: var(--ktx); }
+  body { padding: 20px 24px 40px; font: 13px/18px -apple-system, system-ui, "Segoe UI", sans-serif; }
+  h1 { font-size: 20px; line-height: 28px; margin: 0 0 4px; font-weight: 600; }
+  .kit-sub { color: var(--kmuted); margin: 0 0 18px; max-width: 1100px; }
+  .kit-grid { display: grid; grid-template-columns: 170px repeat(var(--n), max-content); gap: 14px 16px; align-items: start; }
+  .kit-colh { font-weight: 600; color: var(--kmuted); }
+  .kit-name { font-weight: 600; padding-top: 2px; }
+  .kit-name small { display: block; font-weight: 400; color: var(--kmuted); }
+  .kit-band { position: relative; overflow: hidden; width: calc(800px * var(--k)); height: calc(300px * var(--k)); outline: 1px solid var(--kline); }
+  .kit-band .band-canvas { position: absolute; left: 0; top: 0; width: 800px; height: 300px; transform-origin: 0 0; transform: scale(var(--k)); overflow: hidden; }
+  .kit-cap { color: var(--kmuted); font-size: 11px; line-height: 14px; margin-top: 4px; }
+  #err { white-space: pre-wrap; color: #ff453a; font: 12px/16px ui-monospace, Consolas, monospace; }
+  #kit-names { display: none; }
 </style>
 </head>
 <body>
-<h1 class="kit-h1">Mac screens</h1>
-<p class="kit-sub">D.scenes.mac(name, { dark, accent, host, appName }). The pointer, ring and click are the timeline engine's, as in the wizard.</p>
+<h1>Mac Scenes</h1>
+<p class="kit-sub">D.scenes.mac(name, { dark, accent, host, appName, appSize, appVersion, notarized, frame: 'band', still, off }), each in the 800 × 300 pt band of the picture screens. The pointer, ring and highlight are the timeline engine’s (D.playScene), as in the setup window. The crop must never cut through text.</p>
 <div id="err"></div>
 <div class="kit-grid" id="grid"></div>
+<pre id="kit-names"></pre>
 <script>
-  // Errors from the scripts below show on the page, so a headless render reveals them.
+  // Errors from the scripts below show on the page, so a headless render shows them too.
   window.addEventListener('error', function (e) { document.getElementById('err').textContent += (e.message || e) + ' @ ' + (e.filename || '') + ':' + (e.lineno || '') + '\n'; });
 </script>
 <script src="../ui/scenes.js"></script>
@@ -39,50 +49,76 @@
 <script>
 (function () {
   'use strict';
-  const D = window.USBC;
-  const P = new URLSearchParams(location.search);
-  document.documentElement.dataset.theme = P.get('theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-  const k = Number(P.get('k') || 1);
-  document.documentElement.style.setProperty('--kk', k);
-  const cols = (P.get('cols') || 'dark:purple,light:purple,dark:blue').split(',').map((c) => { const p = c.split(':'); return { dark: p[0] !== 'light', accent: p[1] || 'purple' }; });
-  const names = P.get('only') ? P.get('only').split(',') : D.scenes.mac.names;
-  const NOTES = {
-    'safari-type': 'Click the address bar, type, Return', 'safari-download': 'Click Download', 'safari-open': 'Double-click the download',
-    'safari-settings': 'Click Open Privacy & Security', 'safari-allow': 'Click Allow', 'gk-notopened': 'Click Done (not Move to Trash)',
-    'gk-settings': 'Click Open Anyway', 'gk-confirm': 'Click Open Anyway', 'password': 'Type the password, Modify Settings',
-    'bg-items': 'Nothing to click', 'screen-prompt': 'Click Open System Settings', 'screen-list': 'Turn on the switch',
-    'screen-reopen': 'Click Quit & Reopen', 'ax-prompt': 'Click Open System Settings', 'ax-list': 'Turn on the switch',
-    'login-list': 'Turn on the switch', 'displays': 'Drag the display into place',
+  var D = window.USBC || {};
+  var P = new URLSearchParams(location.search);
+  var root = document.documentElement;
+  root.dataset.theme = P.get('theme') || (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+
+  // SPEC §6.3, for when macos.js doesn't list its scenes.
+  var SPEC_NAMES = ['safari-type', 'safari-download', 'safari-allow-dl', 'safari-open', 'safari-settings', 'safari-allow',
+    'gk-notopened', 'gk-open', 'gk-anyway', 'screen-prompt', 'ax-prompt', 'screen-list', 'ax-list', 'login-list', 'screen-reopen', 'bg-items'];
+  var NOTES = {
+    'safari-type': 'get-app address: type the address', 'safari-download': 'get-app download: click Download',
+    'safari-allow-dl': 'get-app allow-downloads: click Allow', 'safari-open': 'open-app downloads: double-click the download',
+    'safari-settings': 'open-app page-button: click Open Privacy & Security', 'safari-allow': 'open-app safari-allow: click Allow',
+    'gk-notopened': 'open-app not-opened: click Done, not Move to Trash', 'gk-open': 'open-app confirm (notarized): click Open',
+    'gk-anyway': 'open-app open-anyway: Open Anyway, Open Anyway, Touch ID', 'screen-prompt': 'allow-screen prompt: Open System Settings',
+    'ax-prompt': 'allow-control prompt: Open System Settings', 'screen-list': 'allow-screen settings: turn on the switch',
+    'ax-list': 'allow-control settings: turn on the switch', 'login-list': 'login: turn on the switch',
+    'screen-reopen': 'allow-screen reopen: Quit & Reopen', 'bg-items': 'open-app setting-up: “Login Item Added”'
   };
-  const grid = document.getElementById('grid');
+  var all = (D.scenes && D.scenes.mac && D.scenes.mac.names && D.scenes.mac.names.length) ? D.scenes.mac.names.slice() : SPEC_NAMES;
+  document.getElementById('kit-names').textContent = all.join('\n');
+  if (!D.scenes || typeof D.scenes.mac !== 'function') { document.getElementById('err').textContent += 'D.scenes.mac is missing\n'; return; }
+
+  var names = P.get('scene') ? P.get('scene').split(',').map(function (s) { return s.trim(); }).filter(Boolean) : all;
+  var k = Number(P.get('k')) || (names.length === 1 ? 1 : 0.5);
+  root.style.setProperty('--k', k);
+  var cols = (P.get('cols') || 'dark:purple,light:purple,dark:blue,light:blue').split(',').map(function (c) {
+    var p = c.split(':');
+    return { dark: p[0] !== 'light', accent: p[1] || 'purple' };
+  });
+  var opt = function (c) {
+    return {
+      dark: c.dark, accent: c.accent, host: P.get('host') || 'usbc.local', appName: 'USB-C Display',
+      appSize: P.get('size') || '0.7 MB', appVersion: P.get('version') || '5', notarized: P.get('notarized') === '1',
+      frame: 'band', still: P.get('still') === '1', off: P.get('off') === '1'
+    };
+  };
+  var esc = function (t) { return String(t).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+
+  var grid = document.getElementById('grid');
   grid.style.setProperty('--n', cols.length);
-  grid.insertAdjacentHTML('beforeend', '<div></div>' + cols.map((c) => '<div class="kit-colh">' + (c.dark ? 'Dark' : 'Light') + ', ' + c.accent + '</div>').join(''));
-  const jobs = [];
-  names.forEach((name) => {
-    grid.insertAdjacentHTML('beforeend', '<div class="kit-name">' + name + '<small>' + (NOTES[name] || '') + '</small></div>');
-    cols.forEach((c) => {
-      const cell = document.createElement('div');
-      cell.className = 'kit-cell';
-      cell.innerHTML = '<div class="stage labelled"><div class="scene-wrap"><div class="scene"></div></div></div>';
+  grid.insertAdjacentHTML('beforeend', '<div></div>' + cols.map(function (c) { return '<div class="kit-colh">' + (c.dark ? 'Dark' : 'Light') + ', ' + esc(c.accent) + '</div>'; }).join(''));
+  var jobs = [];
+  names.forEach(function (name) {
+    var known = all.indexOf(name) >= 0;
+    grid.insertAdjacentHTML('beforeend', '<div class="kit-name">' + esc(name) + '<small>' + esc(NOTES[name] || (known ? '' : 'not in macos.js')) + '</small></div>');
+    cols.forEach(function (c) {
+      var cell = document.createElement('div');
+      var sc = null;
+      try { sc = D.scenes.mac(name, opt(c)); } catch (e) { document.getElementById('err').textContent += name + ': ' + e.message + '\n'; }
+      var cam = sc && sc.cam ? 's ' + sc.cam.s + ' · x ' + sc.cam.x + ' · y ' + sc.cam.y : '';
+      cell.innerHTML = '<div class="kit-band"><div class="band-canvas">' + (sc ? sc.html : '') + '</div></div>' +
+        '<div class="kit-cap">' + esc((sc && sc.family) || '') + (cam ? ' · ' + esc(cam) : '') + (sc && sc.poster != null ? ' · poster ' + sc.poster : '') + '</div>';
       grid.appendChild(cell);
-      const scene = D.scenes.mac(name, { dark: c.dark, accent: c.accent, host: P.get('host') || 'usbc.local' });
-      const stage = cell.querySelector('.stage'), sc = cell.querySelector('.scene'), wrap = cell.querySelector('.scene-wrap');
-      sc.innerHTML = scene.html;
-      // Same as app.js: the machine label moves onto the stage, the canvas scales to fit.
-      const lbl = sc.querySelector('.mlabel');
-      if (lbl) stage.appendChild(lbl);
-      wrap.style.setProperty('--k', k);
-      wrap.style.top = (36 + (stage.clientHeight - 36) / 2) + 'px';
-      jobs.push([sc, scene]);
+      if (sc) jobs.push([cell.querySelector('.band-canvas'), sc]);
     });
   });
-  // Start every loop together once the font is in, so measurements are right.
-  document.fonts.ready.then(() => {
-    const t0 = document.timeline.currentTime;
-    jobs.forEach(([sc, scene]) => {
-      const anims = D.playScene(sc, scene.tl, t0);
-      let frac = P.get('f') !== null ? Number(P.get('f')) : (P.get('poster') ? scene.poster : null);
-      if (frac !== null) anims.forEach((a) => { a.pause(); a.currentTime = frac * scene.tl.dur + (a._shift || 0); });
+
+  // Start every loop together once the fonts are in, so the pointer's targets are measured right.
+  var fonts = document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve();
+  fonts.then(function () {
+    var t0 = document.timeline ? document.timeline.currentTime : 0;
+    var f = P.get('f');
+    jobs.forEach(function (j) {
+      var canvas = j[0], sc = j[1];
+      var anims = [];
+      try { anims = (D.playScene && sc.tl) ? D.playScene(canvas, sc.tl, t0) || [] : []; } catch (e) { document.getElementById('err').textContent += e.message + '\n'; }
+      var frac = f !== null && f !== '' ? Number(f) : (P.get('poster') === '1' ? (sc.poster != null ? sc.poster : 0) : null);
+      if (frac === null || !anims.length) return;
+      var dur = (sc.tl && sc.tl.dur) || 1000;
+      anims.forEach(function (a) { a.pause(); a.currentTime = frac * dur + (a._shift || 0); });
     });
     document.body.dataset.ready = '1';
   });

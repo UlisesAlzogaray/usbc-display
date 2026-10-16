@@ -1,9 +1,11 @@
 // USB-C Display Setup (Windows). The one download: installs USB-C Display for this account,
 // makes the one admin change it needs, serves the Mac app to the Mac over the cable, and walks
-// through every step on both machines (windows/setup/README.md, CONTRACT.md).
+// through every step on both computers (windows/setup/README.md, CONTRACT.md).
 //
 // usage: "USB-C Display Setup.exe" [--uninstall]
-//   --resume --at X,Y --behind HWND   the installed copy taking over from the downloaded one (internal)
+//   --resume --at X,Y --behind HWND --hold "screen|sub|status|theme|accent|active"
+//                          the installed copy taking over from the downloaded one, holding its
+//                          last frame until it has looked at everything itself (internal)
 //   --elevated <SID>       the admin step, run through UAC by the app itself (internal)
 //   --elevated-remove      undoes the admin step when uninstalling (internal)
 
@@ -19,6 +21,7 @@ namespace UsbcSetup;
 static class Program
 {
     public const string ResumedEventName = @"Local\UsbcDisplaySetupResumed";
+    // The watcher checks this mutex too: while setup is open, it leaves the cable to setup.
     const string InstanceName = @"Local\UsbcDisplaySetup", ShowEventName = @"Local\UsbcDisplaySetupShow";
     static Mutex instance;
 
@@ -48,12 +51,22 @@ static class Program
         try { CoreWebView2Environment.GetAvailableBrowserVersionString(); }
         catch (WebView2RuntimeNotFoundException)
         {
-            var answer = MessageBox.Show(
-                "USB-C Display Setup needs Microsoft Edge WebView2 to show its screens. It comes with Windows 11, " +
-                "but it's missing on this laptop.\n\n" +
-                "Click OK to download it from Microsoft. Open the file, let it install, then open this setup again.",
-                "USB-C Display Setup", MessageBoxButtons.OKCancel, MessageBoxIcon.Information);
-            if (answer == DialogResult.OK)
+            // The app's own buttons, in its language (Windows' standard Cancel follows the Windows
+            // language); Esc and the close box still cancel.
+            var download = new TaskDialogButton("Download…");
+            var cancel = new TaskDialogButton("Cancel");
+            var page = new TaskDialogPage
+            {
+                AllowCancel = true,
+                Caption = "USB-C Display Setup",
+                Heading = "USB-C Display Setup needs Microsoft Edge WebView2, which isn’t on this PC.",
+                Text = "Download and install it from Microsoft, then open USB-C Display Setup again.",
+                Buttons = { download, cancel },
+                DefaultButton = cancel,
+            };
+            using var icon = AppIcon();
+            if (icon != null) page.Icon = new TaskDialogIcon(icon);
+            if (TaskDialog.ShowDialog(page, TaskDialogStartupLocation.CenterScreen) == download)
                 try { Process.Start(new ProcessStartInfo("https://go.microsoft.com/fwlink/p/?LinkId=2124703") { UseShellExecute = true }); } catch { }
             return 1;
         }
@@ -64,6 +77,7 @@ static class Program
         bool resumed = false;
         Point? at = null;
         IntPtr behind = IntPtr.Zero;
+        HoldState hold = null;
         for (int i = 0; i < args.Length; i++)
         {
             if (args[i] == "--resume") resumed = true;
@@ -73,14 +87,27 @@ static class Program
                 if (p.Length == 2 && int.TryParse(p[0], out int x) && int.TryParse(p[1], out int y)) at = new Point(x, y);
             }
             else if (args[i] == "--behind" && i + 1 < args.Length && long.TryParse(args[++i], out long h)) behind = new IntPtr(h);
+            else if (args[i] == "--hold" && i + 1 < args.Length) hold = HoldState.Parse(args[++i]);
         }
 
         Log.Write($"setup: start {Environment.ProcessPath} {string.Join(' ', args)}");
-        var wizard = new Wizard();
+        var wizard = new Wizard(hold);
         var window = new SetupWindow(wizard, at, resumed, behind);
         new Thread(() => { while (show.WaitOne()) window.ShowFromOtherInstance(); }) { IsBackground = true, Name = "Show" }.Start();
         Application.Run(window);
         return 0;
+    }
+
+    // The app's own icon for its dialogs (as a Mac alert shows the app's icon), at the size a
+    // task dialog draws it on the primary screen; null if it can't be read.
+    public static Icon AppIcon()
+    {
+        try
+        {
+            int size = (int)Math.Round(32 * Native.GetDpiForSystem() / 96.0);
+            return Icon.ExtractIcon(Environment.ProcessPath, 0, size);
+        }
+        catch { return null; }
     }
 
     // The handoff to the installed copy: it becomes the one instance.
@@ -90,5 +117,12 @@ static class Program
         try { instance.ReleaseMutex(); } catch { }
         instance.Dispose();
         instance = null;
+    }
+
+    // The handoff didn't start: this copy stays the one instance.
+    public static void ReclaimInstance()
+    {
+        if (instance != null) return;
+        try { instance = new Mutex(true, InstanceName, out _); } catch { }
     }
 }

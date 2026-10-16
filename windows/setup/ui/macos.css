@@ -1,10 +1,12 @@
-/* Replicas of the Mac's own screens (macOS 27, Liquid Glass) for D.scenes.mac.
-   Everything inside .mk-scr is laid out in Mac points (1 CSS px = 1 pt) and
-   then scaled down as one piece, so sizes below can be read straight off a
-   2x capture by halving the pixels. Measurements come from captures of a
-   real Mac in Dark mode with the purple accent; Light mode is reconstructed
-   with the same geometry. Inter stands in for SF Pro: sizes are set so the
-   cap height matches, and letter-spacing so line widths match. */
+/* Pictures of the Mac's own screens (macOS 27, Liquid Glass) for D.scenes.mac.
+   A picture is an 800 x 300 canvas (.mk), the picture band of the setup
+   window. Everything inside .mk-scr is laid out in Mac points (1 CSS px = 1 pt)
+   on a 1512 x 982 pt screen, then moved and scaled as one piece by the camera,
+   so sizes below can be read straight off a 2x capture by halving the pixels.
+   Measurements come from captures of a real Mac in Dark mode with the purple
+   accent; Light mode uses the same geometry. Inter stands in for SF Pro: sizes
+   are set so the cap height matches, and letter-spacing so line widths match.
+   Colours are sRGB (captures were converted from Display P3). */
 
 @font-face {
   font-family: "MK Text";
@@ -13,24 +15,25 @@
   font-display: block;
 }
 
-/* ---------- Root: one cropped view of the Mac's screen ---------- */
+/* ---------- Root: the band canvas ---------- */
 .mk {
-  position: absolute; inset: 0; overflow: hidden;
-  border-radius: 10px;
+  position: absolute; left: 0; top: 0; width: 800px; height: 300px; overflow: hidden;
   isolation: isolate;
-  font-family: "MK Text", -apple-system, "SF Pro Text", system-ui, sans-serif;
+  font-family: "MK Text", -apple-system, system-ui, sans-serif;
+  font-optical-sizing: none;
   font-size: 12.75px; line-height: 16px; letter-spacing: -0.005em;
+  /* The pictures keep their own tuned type whatever the window's text styles
+     inherit (the PC copy's heavier weights are for the window's own text). */
+  font-weight: 400; font-variation-settings: normal; word-spacing: normal;
   font-feature-settings: "calt", "kern";
   text-rendering: geometricPrecision;
-  -webkit-font-smoothing: antialiased;
   color: var(--tx);
-  cursor: default; user-select: none;
+  cursor: default; user-select: none; pointer-events: none;
   /* Text styles, tuned against the captures. */
   --f13: 400 12.75px/16px "MK Text", system-ui, sans-serif;
   --f13b: 700 12.75px/16px "MK Text", system-ui, sans-serif;
+  --mk-spring: linear(0, .099, .286, .471, .625, .741, .826, .884, .924, .951, .968, .980, .987, .992, .995, .997, 1);
 }
-/* The thin edge around the crop, above the picture but under the pointer. */
-.mk::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px var(--frame); pointer-events: none; z-index: 45; }
 .mk * { box-sizing: border-box; }
 .mk svg { display: block; overflow: visible; }
 .mk .mk-scr { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
@@ -38,7 +41,6 @@
 
 /* ---------- Appearance: Dark (measured) ---------- */
 .mk.dark {
-  --frame: rgba(255, 255, 255, 0.08);
   --tx: #dfdfdf;            /* body text in windows */
   --tx-strong: #ffffff;     /* sidebar text */
   --tx2: #a1a0a0;           /* secondary text */
@@ -64,7 +66,7 @@
   --field-tx: #b2b0af;
   --sw-off: #424141;
   --sw-knob-off: #e3e3e3;
-  /* Alerts (Gatekeeper style): neutral, not tinted */
+  /* Alerts: neutral, not tinted (#202020 card, #303030 buttons, measured) */
   --al: #202020;
   --al-tx: #dddddd;
   --al-btn: #303030;
@@ -82,19 +84,21 @@
   --glass-solid: #2a2a2c;
   --glass-line: rgba(255, 255, 255, 0.13);
   --glass-hi: rgba(255, 255, 255, 0.16);
-  --shadow-win: 0 0 0 0.5px rgba(0, 0, 0, 0.9), 0 22px 56px rgba(0, 0, 0, 0.5), 0 6px 16px rgba(0, 0, 0, 0.32);
-  --shadow-win-off: 0 0 0 0.5px rgba(0, 0, 0, 0.85), 0 14px 36px rgba(0, 0, 0, 0.36);
-  --shadow-al: 0 0 0 0.5px rgba(0, 0, 0, 0.9), 0 26px 70px rgba(0, 0, 0, 0.55), 0 8px 22px rgba(0, 0, 0, 0.35);
+  /* Window shadows as macOS 27 draws them (key / inactive, titled windows)
+     plus the window edge. Alerts and prompts use the key shadow. */
+  --shadow-win: 0 0 0 0.5px rgba(0, 0, 0, 0.8), 0 18px 40px rgba(0, 0, 0, 0.68);
+  --shadow-win-off: 0 0 0 0.5px rgba(0, 0, 0, 0.8), 0 7px 16px rgba(0, 0, 0, 0.45);
+  --shadow-al: 0 0 0 0.5px rgba(0, 0, 0, 0.8), 0 18px 40px rgba(0, 0, 0, 0.68);
+  --win-rim: rgba(255, 255, 255, 0.1);
   --menu-tx: #ffffff;
-  --dim: rgba(0, 0, 0, 0.32);
-  /* the download page (follows the Mac's appearance) */
-  --pg-bg: #000000; --pg-card: #1c1c1e; --pg-tx: #f5f5f7; --pg-muted: #a1a1a6; --pg-line: rgba(255, 255, 255, 0.1);
-  --pg-blue: #0a84ff; --pg-soft: rgba(10, 132, 255, 0.12);
+  --dim: rgba(0, 0, 0, 0.25);
+  /* The download page in Safari (web/index.html, SPEC §8): Canvas colours */
+  --pg-bg: #1e1e1e; --pg-tx: rgba(255, 255, 255, 0.847); --pg-muted: rgba(255, 255, 255, 0.549); --pg-sec: rgba(255, 255, 255, 0.1);
+  --start: #232325;
 }
 
-/* ---------- Appearance: Light (reconstructed with the same geometry) ---------- */
+/* ---------- Appearance: Light (same geometry) ---------- */
 .mk.light {
-  --frame: rgba(0, 0, 0, 0.1);
   --tx: #262626;
   --tx-strong: #1d1d1f;
   --tx2: #7f7e7d;
@@ -117,7 +121,7 @@
   --field: #e1e0df;
   --field-line: rgba(0, 0, 0, 0.06);
   --field-tx: #8a8988;
-  --sw-off: #e3e2e1;
+  --sw-off: #e3e3e3;
   --sw-knob-off: #ffffff;
   --al: #f6f6f6;
   --al-tx: #232323;
@@ -134,37 +138,35 @@
   --glass-solid: #f7f7f8;
   --glass-line: rgba(0, 0, 0, 0.1);
   --glass-hi: rgba(255, 255, 255, 0.9);
-  --shadow-win: 0 0 0 0.5px rgba(0, 0, 0, 0.2), 0 22px 56px rgba(0, 0, 0, 0.24), 0 6px 16px rgba(0, 0, 0, 0.12);
-  --shadow-win-off: 0 0 0 0.5px rgba(0, 0, 0, 0.16), 0 14px 36px rgba(0, 0, 0, 0.16);
-  --shadow-al: 0 0 0 0.5px rgba(0, 0, 0, 0.2), 0 26px 70px rgba(0, 0, 0, 0.3), 0 8px 22px rgba(0, 0, 0, 0.14);
+  --shadow-win: 0 0 0 0.5px rgba(0, 0, 0, 0.18), 0 18px 40px rgba(0, 0, 0, 0.41);
+  --shadow-win-off: 0 0 0 0.5px rgba(0, 0, 0, 0.18), 0 7px 16px rgba(0, 0, 0, 0.24);
+  --shadow-al: 0 0 0 0.5px rgba(0, 0, 0, 0.18), 0 18px 40px rgba(0, 0, 0, 0.41);
+  --win-rim: rgba(255, 255, 255, 0.8);
   --menu-tx: #1d1d1f;
-  --dim: rgba(0, 0, 0, 0.12);
-  --pg-bg: #f5f5f7; --pg-card: #ffffff; --pg-tx: #1d1d1f; --pg-muted: #6e6e73; --pg-line: rgba(0, 0, 0, 0.08);
-  --pg-blue: #0071e3; --pg-soft: #f0f6ff;
+  --dim: rgba(0, 0, 0, 0.2);
+  --pg-bg: #ffffff; --pg-tx: rgba(0, 0, 0, 0.847); --pg-muted: rgba(0, 0, 0, 0.498); --pg-sec: rgba(0, 0, 0, 0.06);
+  --start: #f7f7f8;
 }
 
-/* ---------- Accent colors. --ac fills default buttons and switches, --ac-tx is the
-   text on it, --ac-knob is the switch knob (white with a hint of the accent). ---------- */
-.mk { --ac: #9a55a3; --ac-tx: #fff; }
-.mk.dark.acc-purple { --ac: #9a55a3; }
-.mk.light.acc-purple { --ac: #94459a; }
-.mk.dark.acc-blue, .mk.dark.acc-multicolor { --ac: #1b80f2; }
-.mk.light.acc-blue, .mk.light.acc-multicolor { --ac: #0a77f0; }
-.mk.dark.acc-pink { --ac: #e2508f; }
-.mk.light.acc-pink { --ac: #e0408a; }
-.mk.dark.acc-red { --ac: #e2484c; }
-.mk.light.acc-red { --ac: #dc3a3f; }
-.mk.dark.acc-orange { --ac: #e57f26; }
-.mk.light.acc-orange { --ac: #f07d1a; }
-.mk.dark.acc-yellow { --ac: #f2bd2c; --ac-tx: #1d1d1f; }
-.mk.light.acc-yellow { --ac: #f9bd28; --ac-tx: #1d1d1f; }
-.mk.dark.acc-green { --ac: #55ad3f; }
-.mk.light.acc-green { --ac: #5bb442; }
-.mk.dark.acc-graphite { --ac: #7d7d7f; }
-.mk.light.acc-graphite { --ac: #8c8c8e; }
-.mk { --ac-knob: color-mix(in srgb, var(--ac) 9%, #fff); --ac-ring: color-mix(in srgb, var(--ac) 70%, transparent); }
+/* ---------- Accent: controlAccentColor in sRGB (brief §2.3, API values).
+   Alerts' default buttons and switches use it (measured: #A550A7 dark purple).
+   --ac-tx is the text on it, --ac-knob the knob of a switch that is on. ---------- */
+.mk { --ac: #007aff; --ac-tx: #fff; }
+.mk.dark.acc-purple { --ac: #a550a7; }
+.mk.light.acc-purple { --ac: #953d96; }
+.mk.dark.acc-blue, .mk.light.acc-blue { --ac: #007aff; }
+.mk.dark.acc-pink, .mk.light.acc-pink { --ac: #f74f9e; }
+.mk.dark.acc-red { --ac: #ff5257; }
+.mk.light.acc-red { --ac: #e0383e; }
+.mk.dark.acc-orange, .mk.light.acc-orange { --ac: #f7821b; }
+.mk.dark.acc-yellow { --ac: #ffc600; --ac-tx: #1d1d1f; }
+.mk.light.acc-yellow { --ac: #ffc726; --ac-tx: #1d1d1f; }
+.mk.dark.acc-green, .mk.light.acc-green { --ac: #62ba46; }
+.mk.dark.acc-graphite { --ac: #8c8c8c; }
+.mk.light.acc-graphite { --ac: #989898; }
+.mk { --ac-knob: color-mix(in srgb, var(--ac) 9%, #fff); --ac-ring: color-mix(in srgb, var(--ac) 50%, transparent); }
 
-/* ---------- Desktop: an abstract wallpaper, not Apple's ---------- */
+/* ---------- Desktop: an abstract wallpaper of our own ---------- */
 .mk .mk-wall { position: absolute; inset: 0; overflow: hidden; }
 .mk.dark .mk-wall {
   background:
@@ -183,9 +185,7 @@
     linear-gradient(160deg, #dfe8ff 0%, #e9e2ff 45%, #fde6ee 75%, #f3ecff 100%);
 }
 /* Two soft ribbons of light give it the depth of the glass-era wallpapers. */
-.mk .mk-wall::before, .mk .mk-wall::after {
-  content: ""; position: absolute; border-radius: 50%; filter: blur(40px);
-}
+.mk .mk-wall::before, .mk .mk-wall::after { content: ""; position: absolute; border-radius: 50%; filter: blur(40px); }
 .mk .mk-wall::before { left: -10%; top: 46%; width: 120%; height: 34%; transform: rotate(-14deg); }
 .mk .mk-wall::after { left: 30%; top: -18%; width: 90%; height: 40%; transform: rotate(18deg); }
 .mk.dark .mk-wall::before { background: linear-gradient(90deg, transparent, rgba(92, 150, 255, 0.28) 30%, rgba(170, 120, 255, 0.24) 65%, transparent); }
@@ -201,17 +201,20 @@
 /* ---------- Windows ---------- */
 .mk .mk-win { position: absolute; isolation: isolate; border-radius: 16px; overflow: hidden; background: var(--win); box-shadow: var(--shadow-win); }
 .mk .mk-win.off { box-shadow: var(--shadow-win-off); }
-.mk .mk-win::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.1); pointer-events: none; z-index: 30; }
-.mk.light .mk-win::after { box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.8); }
+.mk .mk-win::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 0.5px var(--win-rim); pointer-events: none; z-index: 30; }
+.mk.light .mk-win::after { box-shadow: inset 0 0.5px 0 var(--win-rim); }
 
 /* Traffic lights: 14 pt glassy buttons, grey when the window isn't in front. */
 .mk .mk-lights { position: absolute; left: 19px; top: 19px; display: flex; gap: 9px; z-index: 20; }
 .mk .mk-lights i { display: block; width: 14px; height: 14px; border-radius: 50%; }
-.mk .mk-lights i:nth-child(1) { background: radial-gradient(circle at 50% 75%, #ee7d70, #e1665a 60%, #d95a4d); box-shadow: inset 0 0 0 0.5px rgba(150, 30, 20, 0.45), inset 0 1px 0.5px rgba(255, 200, 190, 0.55); }
-.mk .mk-lights i:nth-child(2) { background: radial-gradient(circle at 50% 75%, #f8d35a, #f3c22d 60%, #e8b520); box-shadow: inset 0 0 0 0.5px rgba(150, 100, 0, 0.45), inset 0 1px 0.5px rgba(255, 240, 180, 0.6); }
-.mk .mk-lights i:nth-child(3) { background: radial-gradient(circle at 50% 75%, #79cf47, #62bd2e 60%, #55ae24); box-shadow: inset 0 0 0 0.5px rgba(20, 90, 0, 0.45), inset 0 1px 0.5px rgba(200, 255, 180, 0.55); }
-.mk .off .mk-lights i, .mk .mk-win.off .mk-lights i { background: #5a5856; box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.35); }
-.mk.light .off .mk-lights i, .mk.light .mk-win.off .mk-lights i { background: #d3d2d1; box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.12); }
+.mk .mk-lights i:nth-child(1) { background: radial-gradient(circle at 50% 75%, #ef6962, #f25d54 60%, #f55145); box-shadow: inset 0 0 0 0.5px rgba(150, 30, 20, 0.45), inset 0 1px 0.5px rgba(255, 200, 190, 0.55); }
+.mk .mk-lights i:nth-child(2) { background: radial-gradient(circle at 50% 75%, #fece30, #fcc000 60%, #fab500); box-shadow: inset 0 0 0 0.5px rgba(150, 100, 0, 0.45), inset 0 1px 0.5px rgba(255, 240, 180, 0.6); }
+.mk .mk-lights i:nth-child(3) { background: radial-gradient(circle at 50% 75%, #4fc43a, #34c100 60%, #3ac200); box-shadow: inset 0 0 0 0.5px rgba(20, 90, 0, 0.45), inset 0 1px 0.5px rgba(200, 255, 180, 0.55); }
+.mk.light .mk-lights i:nth-child(1) { background: radial-gradient(circle at 50% 75%, #f89089, #fb7f78 60%, #fe6f65); }
+.mk.light .mk-lights i:nth-child(2) { background: radial-gradient(circle at 50% 75%, #ffd44c, #fdc93f 60%, #fcba33); }
+.mk.light .mk-lights i:nth-child(3) { background: radial-gradient(circle at 50% 75%, #9fde80, #87d761 60%, #62d129); }
+.mk .mk-win.off .mk-lights i { background: linear-gradient(#504f50, #474647); box-shadow: inset 0 0.75px 0.25px rgba(255, 255, 255, 0.3), inset 0 -0.75px 0.25px rgba(255, 255, 255, 0.24); }
+.mk.light .mk-win.off .mk-lights i { background: linear-gradient(#efeff3, #f5f6f7); box-shadow: inset 0 0 0 0.5px #aaabaf; }
 
 /* ---------- System Settings ---------- */
 .mk .mk-set { width: 740px; height: 625px; }
@@ -242,6 +245,9 @@
 .mk .mk-tb .ttl { position: absolute; left: 93.5px; top: 0; font: 700 14.5px/52px "MK Text", system-ui; letter-spacing: 0; color: var(--title); white-space: nowrap; }
 .mk .mk-set.off .mk-tb .ttl { color: var(--title-off); }
 .mk .mk-set.off .mk-tb .bf .b { color: var(--chev); }
+/* A pane under a dialog (screen-reopen, ax-prompt): its header and description
+   aren't drawn, so no scrap of them sticks out beside the dialog. */
+.mk .mk-set.under .mk-hdr, .mk .mk-set.under .mk-desc { visibility: hidden; }
 
 /* Grouped rows ("form" style). */
 .mk .mk-g { position: absolute; left: 20px; width: 468px; border-radius: 11px; background: var(--grp); overflow: hidden; }
@@ -263,11 +269,10 @@
 .mk .mk-desc { position: absolute; left: 30.5px; width: 450px; font: 400 11px/14px "MK Text", system-ui; letter-spacing: 0; color: var(--tx3); }
 .mk .mk-note { color: var(--tx2); font: 400 11px/14px "MK Text", system-ui; letter-spacing: 0; }
 
-/* Push button (capsule) and the circled question mark. */
+/* Push button and the circled question mark: a flat fill with no shadow in
+   both appearances (macOS 27; only Glass buttons are white with a rim). */
 .mk .mk-pb { display: inline-flex; align-items: center; justify-content: center; height: 23px; padding: 0 12px; border-radius: 7px; background: var(--btn); color: var(--btn-tx); font: var(--f13); line-height: 23px; white-space: nowrap; }
-.mk.light .mk-pb { background: #fff; box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.12), 0 0.5px 2px rgba(0, 0, 0, 0.1); }
 .mk .mk-help { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: var(--btn); color: var(--btn-tx); font: 500 14px/24px "MK Text", system-ui; }
-.mk.light .mk-help { background: #fff; box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.12), 0 0.5px 2px rgba(0, 0, 0, 0.1); }
 
 /* Pop-up button with the round up/down arrows. */
 .mk .mk-pop { display: flex; align-items: center; gap: 12px; color: var(--tx); }
@@ -278,12 +283,10 @@
 .mk .mk-sw { position: relative; width: 36px; height: 16px; border-radius: 8px; background: var(--sw-off); flex: none; box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.12); }
 .mk .mk-sw .tr { position: absolute; inset: 0; border-radius: inherit; background: linear-gradient(var(--ac), color-mix(in srgb, var(--ac) 88%, #000)); opacity: 0; }
 .mk .mk-sw .kn { position: absolute; left: 1.5px; top: 1.5px; width: 21px; height: 13px; border-radius: 6.5px; background: var(--sw-knob-off); box-shadow: 0 0.5px 1px rgba(0, 0, 0, 0.25); }
-.mk .mk-sw .kn::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: var(--ac-knob); opacity: 0; }
-.mk .mk-sw.on .tr, .mk .mk-sw.on .kn::after { opacity: 1; }
+.mk .mk-sw.on .tr { opacity: 1; }
 .mk .mk-sw.on .kn { transform: translateX(12px); }
 .mk.light .mk-sw { box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.06); }
-/* The switch the pointer turns on: driven by the timeline, so these are the
-   "off" starting values; .kn::after can't be animated, so a real child is used. */
+/* The knob's tint when on: a real child, so the timeline can animate it. */
 .mk .mk-sw .kt { position: absolute; inset: 0; border-radius: inherit; background: var(--ac-knob); opacity: 0; }
 .mk .mk-sw.on .kt { opacity: 1; }
 
@@ -293,10 +296,17 @@
 .mk .mk-pm i { width: 1px; height: 15px; background: var(--sep); margin: 0 10px; }
 
 /* Holds a dialog in the middle of what the camera shows. */
-.mk .mk-ctr { position: absolute; display: flex; align-items: center; justify-content: center; }
+.mk .mk-ctr { position: absolute; display: flex; align-items: center; justify-content: center; z-index: 12; }
 .mk .mk-ctr > * { position: relative !important; left: auto !important; top: auto !important; flex: none; }
 
-/* ---------- Alerts (Gatekeeper style: 260 pt wide, round, stacked buttons) ---------- */
+/* A dialog materialises as the picture changes (SPEC §4.3). */
+.mk .mat { animation: mk-mat 250ms var(--mk-spring) both; }
+@keyframes mk-mat { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: none; } }
+/* Screenshots (?shot=1) show the settled frame: a headless browser's virtual clock doesn't run CSS
+   animations, so the dialog would stay half faded in. */
+html.shot .mk .mat { animation: none; }
+
+/* ---------- Alerts (260 pt wide, 26 pt round, glass) ---------- */
 .mk .mk-al { position: absolute; z-index: 12; width: 260px; border-radius: 26px; background: var(--al); box-shadow: var(--shadow-al); padding: 20px 0 16px; color: var(--al-tx); }
 .mk .mk-al::before { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 1px 0 var(--al-rim), inset 0 0 0 0.5px rgba(255, 255, 255, 0.06); pointer-events: none; }
 .mk.light .mk-al::before { box-shadow: inset 0 1px 0 #fff, inset 0 0 0 0.5px rgba(0, 0, 0, 0.04); }
@@ -315,6 +325,13 @@
 .mk.light .mk-al .fld { background: #fff; box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.14); }
 .mk .mk-al .fld .ph { position: absolute; left: 11px; top: 0; color: var(--tx2); }
 .mk .mk-al .fld .dots { letter-spacing: 0.12em; font-size: 15px; }
+/* An alert run as a sheet (Safari's questions): no icon, the lighter sheet card
+   and buttons (27.0.1 alert sheet: #383838 / #474747 dark, #EAEAEA / #D9D9D9 light). */
+.mk.dark .mk-al.sheet { background: #383838; }
+.mk.dark .mk-al.sheet .bt div:not(.def) { background: #474747; }
+.mk.light .mk-al.sheet { background: #eaeaea; }
+.mk.light .mk-al.sheet .bt div:not(.def) { background: #d9d9d9; }
+.mk .mk-al.sheet h4 { margin-top: 0; }
 
 /* ---------- Permission prompt (titled panel, 461 pt wide) ---------- */
 .mk .mk-pr { position: absolute; width: 461px; height: 181px; border-radius: 16px; overflow: hidden; background: var(--pr-body); box-shadow: var(--shadow-al); color: var(--tx); }
@@ -327,7 +344,6 @@
 .mk .mk-pr .mk-help { position: absolute; left: 20px; top: 137px; background: var(--pr-btn); color: var(--pr-btn-tx); box-shadow: none; }
 .mk .mk-pr .bt { position: absolute; right: 20px; top: 137px; display: flex; gap: 12px; }
 .mk .mk-pr .bt div { height: 24px; padding: 0 11.6px; border-radius: 6px; background: var(--pr-btn); color: var(--pr-btn-tx); font: var(--f13); line-height: 24px; letter-spacing: 0.012em; white-space: nowrap; }
-.mk.light .mk-pr .bt div, .mk.light .mk-pr .mk-help { background: #fff; box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.12), 0 0.5px 2px rgba(0, 0, 0, 0.1); }
 
 /* ---------- Safari ---------- */
 .mk .mk-saf { background: var(--pg-bg); }
@@ -336,42 +352,43 @@
 .mk.light .mk-saf .pill { box-shadow: 0 0 0 0.5px var(--capsule-line), 0 1px 3px rgba(0, 0, 0, 0.07), inset 0 0.75px 0 #fff; }
 .mk .mk-saf .pill svg { width: 17px; height: 17px; margin: 0 9px; }
 .mk .mk-saf .pill .fd { color: var(--chev); }
+.mk .mk-saf.off .pill, .mk .mk-saf.off .mk-addr { color: var(--tx2); }
 .mk .mk-saf .mk-addr { position: absolute; top: 9px; height: 34px; border-radius: 17px; background: var(--capsule); box-shadow: 0 0 0 0.5px var(--capsule-line), inset 0 0.75px 0 rgba(255, 255, 255, 0.14); font: var(--f13); line-height: 34px; color: var(--tx-strong); text-align: center; white-space: nowrap; overflow: hidden; }
-.mk.light .mk-saf .addr { box-shadow: 0 0 0 0.5px var(--capsule-line), 0 1px 3px rgba(0, 0, 0, 0.07), inset 0 0.75px 0 #fff; }
+.mk.light .mk-saf .mk-addr { box-shadow: 0 0 0 0.5px var(--capsule-line), 0 1px 3px rgba(0, 0, 0, 0.07), inset 0 0.75px 0 #fff; }
 .mk .mk-saf .mk-addr .ph { position: absolute; inset: 0; color: var(--tx2); }
 .mk .mk-saf .mk-addr .url { position: relative; }
 .mk .mk-saf .mk-addr .rl { position: absolute; right: 11px; top: 10px; width: 14px; height: 14px; color: var(--tx2); }
-.mk .mk-saf .mk-addr .prog { position: absolute; left: 0; top: 0; bottom: 0; width: 100%; transform-origin: 0 0; transform: scaleX(0); background: color-mix(in srgb, var(--pg-blue) 22%, transparent); }
+.mk .mk-saf .mk-addr .prog { position: absolute; left: 0; top: 0; bottom: 0; width: 100%; transform-origin: 0 0; transform: scaleX(0); background: color-mix(in srgb, var(--ac) 22%, transparent); }
 .mk .mk-saf .mk-addr.edit { text-align: left; padding-left: 14px; background: var(--al); box-shadow: 0 0 0 3.5px var(--ac-ring), 0 0 0 0.5px var(--capsule-line); }
 .mk .mk-saf .mk-addr.edit .ph { left: 14px; text-align: left; }
 .mk .mk-saf .mk-addr .caret { display: inline-block; width: 1.5px; height: 15px; margin-left: 1px; vertical-align: -3px; background: var(--ac); }
 .mk .mk-saf .vp { position: absolute; left: 0; right: 0; top: 0; bottom: 0; overflow: hidden; }
-.mk .mk-saf .start { position: absolute; inset: 0; background: var(--pg-bg); }
-.mk.dark .mk-saf .start { background: linear-gradient(#232325, #1d1d1f); }
-.mk.light .mk-saf .start { background: linear-gradient(#f7f7f8, #efeff1); }
+.mk .mk-saf .mk-start { position: absolute; inset: 0; background: var(--start); }
+.mk .mk-saf .dlb svg { width: 18px; height: 18px; }
 
-/* The download page, as the laptop serves it (web/index.html), at 1 CSS px = 1 pt. */
-.mk .mk-page { position: absolute; left: 0; right: 0; font: 400 17px/1.47 "MK Text", system-ui; letter-spacing: -0.01em; color: var(--pg-tx); text-align: center; }
-.mk .mk-page main { display: block; width: 560px; margin: 0 auto; background: var(--pg-card); border-radius: 22px; padding: 44px 44px 36px; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 40px rgba(0, 0, 0, 0.5); }
-.mk.light .mk-page main { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 12px 40px rgba(0, 0, 0, 0.08); }
-.mk .mk-page .icon { width: 112px; height: 112px; margin: 0 auto 18px; }
-.mk .mk-page h1 { font-size: 32px; line-height: 1.15; letter-spacing: -0.025em; margin: 0 0 10px; font-weight: 700; }
-.mk .mk-page .pl { color: var(--pg-muted); margin: 0 auto 28px; }
-.mk .mk-page .path { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 0 auto 30px; color: var(--pg-muted); font-size: 13px; line-height: 1.47; }
-.mk .mk-page .path span { display: flex; flex-direction: column; align-items: center; gap: 6px; }
-.mk .mk-page .wire { width: 110px; height: 4px; border-radius: 2px; background: var(--pg-line); margin-bottom: 20px; position: relative; overflow: hidden; }
-.mk .mk-page .wire::after { content: ""; position: absolute; left: 35%; top: 0; width: 30%; height: 100%; border-radius: 2px; background: var(--pg-blue); }
-.mk .mk-page .dl { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-width: 300px; padding: 16px 30px; font-size: 19px; line-height: 28px; font-weight: 600; letter-spacing: -0.015em; color: #fff; background: var(--pg-blue); border-radius: 980px; }
-.mk .mk-page .dl svg { width: 20px; height: 20px; }
-.mk .mk-page .dl.again { background: transparent; color: var(--pg-blue); box-shadow: inset 0 0 0 2px var(--pg-blue); min-width: 0; padding: 10px 22px; font-size: 16px; line-height: 24px; }
-.mk .mk-page .meta { color: var(--pg-muted); font-size: 14px; margin: 12px 0 0; }
-.mk .mk-page .box { text-align: left; margin: 18px 0 0; padding: 22px 24px; border-radius: 16px; background: var(--pg-soft); }
-.mk .mk-page .box h2 { font-size: 19px; line-height: 1.3; margin: 0 0 8px; letter-spacing: -0.015em; }
-.mk .mk-page .box p { margin: 0 0 14px; }
-.mk .mk-page .box .dl { width: 100%; min-width: 0; font-size: 17px; padding: 14px 24px; }
-.mk .mk-page .box .meta { margin: 10px 0 0; text-align: center; }
-.mk .mk-page .box ol { margin: 0; padding-left: 22px; }
-.mk .mk-page .box li { margin: 6px 0; }
+/* The download page as Safari shows it (web/index.html, SPEC §8), at 1 CSS px
+   = 1 pt: one 440 pt column, centred in the area under the toolbar. Sizes are
+   the page's px times 0.9685 (Inter matched to SF), letter-spacing per brief §2.2. */
+.mk .mk-page { position: absolute; left: 0; right: 0; top: 52px; bottom: 0; display: flex; align-items: center; justify-content: center; background: var(--pg-bg); color: var(--pg-tx); text-align: center; }
+.mk .mk-page main { display: flex; flex-direction: column; align-items: center; width: 440px; }
+.mk .mk-page .icon { width: 128px; height: 128px; }
+.mk .mk-page .icon svg { width: 128px; height: 128px; }
+.mk .mk-page h1 { margin: 16px 0 0; font: 700 25.18px/32px "MK Text", system-ui; letter-spacing: -0.0016em; color: var(--pg-tx); }
+.mk .mk-page .pl { margin: 6px 0 0; font: 400 16.46px/22px "MK Text", system-ui; letter-spacing: -0.0063em; color: var(--pg-muted); }
+.mk .mk-page .pl b { font-weight: 600; }
+.mk .mk-page .nw { white-space: nowrap; }
+/* Under the Gatekeeper alerts (family "alert") the page's sentence and meta
+   line aren't drawn: scraps of them around the alert would repeat its words. */
+.mk.fam-alert .mk-page .pl, .mk.fam-alert .mk-page .meta { visibility: hidden; }
+.mk .mk-page .act { margin-top: 28px; display: flex; flex-direction: column; align-items: center; }
+.mk .mk-page .cap { display: inline-flex; align-items: center; justify-content: center; height: 36px; min-width: 180px; padding: 0 20px; border-radius: 18px; font: 400 12.59px/36px "MK Text", system-ui; letter-spacing: 0.0071em; white-space: nowrap; }
+/* The page's AccentColor: WebKit on macOS 27.0.1 resolves it to its default blue whatever the
+   Mac's accent (measured with Purple, WP6), so the page's own buttons are blue in the pictures too. */
+.mk .mk-page .cap.pri { background: #007AFF; color: #FFFFFF; }
+.mk .mk-page .cap.sec { background: var(--pg-sec); color: var(--pg-tx); }
+.mk .mk-page .nt { margin: 12px 0 0; font: 400 12.59px/16px "MK Text", system-ui; letter-spacing: 0.0071em; color: var(--pg-muted); }
+.mk .mk-page .nt + .cap { margin-top: 12px; }
+.mk .mk-page .meta { margin: 10px 0 0; font: 400 12.59px/16px "MK Text", system-ui; letter-spacing: 0.0071em; color: var(--pg-muted); }
 
 /* Suggestions under the address field while typing. */
 .mk .mk-sug { position: absolute; top: 49px; border-radius: 16px; padding: 6px; background: var(--glass-solid); box-shadow: 0 0 0 0.5px var(--glass-line), 0 14px 40px rgba(0, 0, 0, 0.32), inset 0 0.75px 0 var(--glass-hi); color: var(--tx); font: var(--f13); z-index: 7; }
@@ -380,11 +397,8 @@
 .mk .mk-sug .r svg { width: 15px; height: 15px; color: var(--tx2); flex: none; }
 .mk .mk-sug .r.on { background: var(--ac); color: var(--ac-tx); }
 .mk .mk-sug .r.on svg { color: var(--ac-tx); }
-.mk .mk-sug .r small { color: var(--tx2); font-size: 12px; }
-.mk .mk-sug .r.on small { color: color-mix(in srgb, var(--ac-tx) 75%, transparent); }
 
-/* Toolbar download button and the Downloads popover. */
-.mk .mk-saf .dlb svg { width: 18px; height: 18px; }
+/* The Downloads popover. */
 .mk .mk-pop2 { position: absolute; width: 330px; border-radius: 22px; background: var(--glass-solid); box-shadow: 0 0 0 0.5px var(--glass-line), 0 18px 50px rgba(0, 0, 0, 0.35), inset 0 0.75px 0 var(--glass-hi); padding: 10px; color: var(--tx); z-index: 8; }
 .mk .mk-pop2 .hd { display: flex; align-items: center; justify-content: space-between; height: 28px; padding: 0 6px 0 8px; font: var(--f13b); letter-spacing: 0.01em; }
 .mk .mk-pop2 .hd span { font: var(--f13); color: var(--tx2); }
@@ -396,46 +410,21 @@
 .mk .mk-pop2 .it .mk-hl { position: absolute; inset: 0; border-radius: inherit; background: var(--ac); opacity: 0; }
 .mk .mk-pop2 .it > :not(.mk-hl) { position: relative; }
 
-/* Return key, shown pressed when Safari needs it. */
-.mk .mk-key { position: absolute; width: 78px; height: 46px; border-radius: 9px; background: linear-gradient(#fbfbfb, #ececee); box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.25), 0 2px 0 #b9b9be, 0 4px 10px rgba(0, 0, 0, 0.3); color: #3a3a3c; font: 500 12px/1 "MK Text", system-ui; letter-spacing: 0; z-index: 40; }
-.mk .mk-key span { position: absolute; right: 10px; bottom: 9px; }
-.mk .mk-key svg { position: absolute; right: 10px; top: 9px; width: 12px; height: 10px; }
-
 /* ---------- Notification banner (glass) ---------- */
-.mk .mk-note-b { position: absolute; width: 344px; border-radius: 22px; padding: 12px 14px 12px 12px; background: var(--glass); backdrop-filter: blur(24px) saturate(1.8); box-shadow: 0 0 0 0.5px var(--glass-line), 0 10px 30px rgba(0, 0, 0, 0.28), inset 0 0.75px 0 var(--glass-hi); display: flex; gap: 10px; color: var(--tx-strong); }
+.mk .mk-note-b { position: absolute; width: 344px; border-radius: 22px; padding: 12px 14px 12px 12px; background: var(--glass); backdrop-filter: blur(24px) saturate(1.8); box-shadow: 0 0 0 0.5px var(--glass-line), 0 10px 30px rgba(0, 0, 0, 0.28), inset 0 0.75px 0 var(--glass-hi); display: flex; gap: 10px; color: var(--tx-strong); z-index: 20; }
 .mk .mk-note-b .ic { width: 38px; height: 38px; flex: none; margin-top: 1px; }
-.mk .mk-note-b .bd { flex: 1; min-width: 0; }
+.mk .mk-note-b .bd { flex: 1; min-width: 0; padding-right: 18px; }
 .mk .mk-note-b b { display: block; font: var(--f13b); letter-spacing: 0.01em; }
 .mk .mk-note-b p { margin: 1px 0 0; font: var(--f13); color: var(--tx); }
 .mk .mk-note-b .tm { position: absolute; right: 14px; top: 12px; font: var(--f13); font-size: 11.35px; color: var(--tx2); }
 
-/* ---------- Sheet dim and arrangement view (Displays) ---------- */
+/* Dim under a sheet. */
 .mk .mk-dim { position: absolute; inset: 0; background: var(--dim); z-index: 9; }
-.mk .mk-arr { position: absolute; border-radius: 22px; background: var(--al); box-shadow: var(--shadow-al); z-index: 10; color: var(--al-tx); }
-.mk .mk-arr .txt { position: absolute; left: 22px; right: 22px; top: 18px; font: var(--f13); color: var(--tx2); }
-.mk .mk-arr .area { position: absolute; left: 22px; right: 22px; top: 62px; height: 140px; overflow: hidden; border-radius: 12px; background: rgba(0, 0, 0, 0.18); }
-.mk.light .mk-arr .area { background: rgba(0, 0, 0, 0.05); }
-.mk .mk-disp { position: absolute; border-radius: 3px; box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.3); overflow: hidden; }
-.mk .mk-disp .wl { position: absolute; inset: 0; background: linear-gradient(160deg, #1a2a7a, #4a2a8c 50%, #9a3a7a); }
-.mk.light .mk-disp .wl { background: linear-gradient(160deg, #8fb3ff, #c4a8ff 50%, #ffb8cc); }
-.mk .mk-disp .mb { position: absolute; left: 0; right: 0; top: 0; height: 5px; background: rgba(255, 255, 255, 0.85); }
-.mk .mk-disp span { position: absolute; left: 0; right: 0; bottom: 6px; text-align: center; color: #fff; font: 600 11px/14px "MK Text", system-ui; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5); }
-.mk .mk-disp.drag { box-shadow: 0 0 0 2px var(--ac), 0 6px 16px rgba(0, 0, 0, 0.4); }
 
-/* Display thumbnails at the top of the Displays pane. */
-.mk .mk-dth { position: absolute; text-align: center; font: var(--f13b); letter-spacing: 0.01em; color: var(--tx); }
-
-/* ---------- Pointer, and the highlight the wizard draws around the target ---------- */
+/* ---------- The pointer (our own arrow) ---------- */
 .mk .mk-cur { position: absolute; left: 0; top: 0; z-index: 50; pointer-events: none; filter: drop-shadow(0 1px 1.2px rgba(0, 0, 0, 0.45)); }
 .mk .mk-cur svg { display: block; overflow: visible; transform-origin: 1px 1px; }
-.scene:has(> .mk) > .halo {
-  border-radius: 999px !important;
-  box-shadow: 0 0 0 2px var(--mk-ring, #b98cff), 0 0 0 6px color-mix(in srgb, var(--mk-ring, #b98cff) 28%, transparent), 0 0 14px 4px color-mix(in srgb, var(--mk-ring, #b98cff) 30%, transparent);
+
+@media (prefers-reduced-motion: reduce) {
+  .mk .mat { animation: none; }
 }
-.scene:has(> .mk) > .ring {
-  width: 26px; height: 26px; margin: -13px 0 0 -13px;
-  border: 2px solid var(--mk-ring, #b98cff); background: color-mix(in srgb, var(--mk-ring, #b98cff) 18%, transparent);
-}
-.scene:has(> .mk.light) { --mk-ring: #8a4fe0; }
-.scene:has(> .mk.dark) { --mk-ring: #c49bff; }
-.scene:has(> .mk.sq) > .halo { border-radius: 9px !important; }

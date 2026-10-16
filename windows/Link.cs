@@ -40,7 +40,12 @@ static class Proto
                       StatusLoginItemEnabled = 16, StatusLoginItemNeedsApproval = 32, StatusSessionActive = 64,
                       StatusRunningAsAgent = 128, StatusInApplications = 256, StatusScreenNeedsRelaunch = 512,
                       // What's on the Mac's screen now (Mac app 4): the setup shows the same.
-                      StatusSettingsFront = 1024, StatusPromptUp = 2048, StatusMacDark = 4096;
+                      StatusSettingsFront = 1024, StatusPromptUp = 2048, StatusMacDark = 4096,
+                      // Where the Mac's Displays settings put this screen, relative to the main
+                      // display (at most one bit; none = not known yet), and the authentication
+                      // sheet over System Settings (a password or Touch ID request is showing).
+                      StatusDisplayRight = 8192, StatusDisplayLeft = 16384, StatusDisplayAbove = 32768,
+                      StatusDisplayBelow = 65536, StatusAuthUp = 131072;
     public const uint RefuseNone = 0, RefuseNoScreenRecording = 1;
     // The handover when the picture starts (Mac app 4): the setup tells the Mac where its window
     // is ("UCDX" {x | y << 16, w | h << 16, dpi %} in panel pixels; w = 0 closes it) and mirrors

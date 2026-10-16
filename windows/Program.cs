@@ -1,4 +1,4 @@
-// USB-C Display, Windows side: shows the Mac's extra monitor full screen on this laptop.
+// USB-C Display, Windows side: shows the Mac's extra monitor full screen on this PC.
 //
 // Connects to mac/usbc-display over the network the USB-C cable creates (protocol in Link.cs):
 // a control connection for the pointer, heartbeats and clock sync, and a frame connection for
@@ -6,6 +6,14 @@
 // once; a separate thread shows the newest picture at each screen refresh (--tearing: at once).
 //
 // usage: UsbcDisplay [--looks-like WxH | --scale N] [--tearing] [--window WxH] [--seconds N] ...
+//
+// Lines the setup and the watcher read from its output (windows/setup/CONTRACT.md):
+//   "Window: <hwnd>"             the picture's window exists (decimal handle; hidden until the picture)
+//   "Connected to <address>."    the Mac answered on the cable
+//   "Picture on screen."         the window is up, in front, showing the Mac's display
+//   "Pointer on screen"          the Mac's pointer was first seen on this display, over the picture
+//   "Input: allowed" / "Input: not allowed"   whether the Mac may post this PC's keyboard and trackpad
+//   "Refused: screen recording"  the Mac can't record its screen; the receiver exits with code 3
 
 using System;
 using System.Buffers.Binary;
@@ -30,6 +38,8 @@ static unsafe class Program
     static bool noCursor;
     static int winX, winY;
     static volatile bool quitting;
+    const int ExitRefused = 3;  // the Mac turned the session down: Screen Recording is off
+    static int exitCode;
     static string host;
     static int port = 48100, testW, testH, seconds, scaleOverride, ptW, ptH;
     static bool vsync = true, scanSync = true, exitWhenUnplugged, testCard, testDrag, videoOnly, h264, losslessOnly, verbose, colorProfile = true, useInput = true;
@@ -118,9 +128,10 @@ static unsafe class Program
             ptH = screen.Height * 100 / s;
         }
         Console.WriteLine($"USB-C Display (Windows side): {screen.Width}x{screen.Height}, {screen.Hz} Hz; the Mac's display will look like {ptW}x{ptH}");
-        Console.WriteLine("Press Esc on this laptop (or Ctrl+Alt+Esc from anywhere) to stop.");
+        Console.WriteLine("Press Esc on this PC (or Ctrl+Alt+Esc from anywhere) to stop.");
 
         hwnd = CreateWindow();
+        Console.WriteLine($"Window: {(long)hwnd}");  // the setup brings it forward at the handover
         if (colorProfile)
         {
             string icc = PanelProfile.Find(Win32.MonitorDeviceName(hwnd));
@@ -139,7 +150,7 @@ static unsafe class Program
             Input.Width = screen.Width;
             Input.Height = screen.Height;
             Input.Install();
-            Console.WriteLine("This laptop's trackpad and keyboard work on the Mac's display (--no-input to turn off): " +
+            Console.WriteLine("This PC's keyboard and trackpad work on the Mac's display (--no-input to turn off): " +
                               "Alt is Command, the Windows key is Option.");
         }
         var worker = new Thread(Worker) { IsBackground = true, Priority = ThreadPriority.Highest, Name = "control" };
@@ -153,7 +164,7 @@ static unsafe class Program
         Win32.RestorePointerShadow();
         DropRenderer();
         Console.WriteLine();
-        return 0;
+        return exitCode;
     }
 
     // Feeds a --dump file through the decoder with logging and saves the last picture as BMP.
@@ -236,9 +247,19 @@ static unsafe class Program
                 if (wp != 0)
                 {
                     Win32.ShowWindow(h, Win32.SW_SHOW);
-                    Win32.SetForegroundWindow(h);
+                    if (!Win32.TakeForeground(h))
+                        Console.WriteLine("Not in front yet: one click on this display gives it the keyboard.");
+                    windowVisible = true;
+                    // Only once the window is really up, so the setup (Receiver.cs), which waits
+                    // for this line, can give it the foreground at once.
+                    Console.WriteLine("Picture on screen.");
+                    AnnouncePointer();
                 }
-                else Win32.ShowWindow(h, Win32.SW_HIDE);
+                else
+                {
+                    windowVisible = false;
+                    Win32.ShowWindow(h, Win32.SW_HIDE);
+                }
                 return 0;
             case Win32.WM_HOTKEY:
             case Win32.WM_KEYDOWN when wp == 0x1B && !Input.Enabled:  // with input on, Esc is the Mac's
@@ -270,8 +291,18 @@ static unsafe class Program
         if (!show) Input.Relative = false;
         // The Mac's pointer images have their own shadow; Windows would add a second one.
         if (show) Win32.HidePointerShadow(); else Win32.RestorePointerShadow();
-        Win32.PostMessageW(hwnd, Win32.WM_APP_SHOW, show ? 1 : 0, 0);
-        if (show) Console.WriteLine("Picture on screen.");  // the setup (Receiver.cs) waits for this line
+        Win32.PostMessageW(hwnd, Win32.WM_APP_SHOW, show ? 1 : 0, 0);  // which prints "Picture on screen."
+    }
+
+    // "Pointer on screen": the first time the Mac's pointer is visible on this display while the
+    // picture is up (the setup's last screen then says to click Done). Once per run.
+    static volatile bool windowVisible;
+    static int pointerAnnounced;
+
+    static void AnnouncePointer()
+    {
+        if (macCursorVisible && windowVisible && Interlocked.Exchange(ref pointerAnnounced, 1) == 0)
+            Console.WriteLine("Pointer on screen");
     }
 
     // The renderer (and its present thread) outlives a connection, so a reconnect keeps the
@@ -386,7 +417,8 @@ static unsafe class Program
                                         (videoOnly ? Proto.HelloVideoOnly : 0) | (noCursor ? 0 : Proto.HelloCursor) |
                                         (h264 ? Proto.HelloH264Hybrid : 0) | (losslessOnly ? Proto.HelloLosslessOnly : 0) |
                                         (testDrag ? Proto.HelloTestDrag : 0) | (profileBytes != null ? Proto.HelloProfile : 0) |
-                                        (useInput ? Proto.HelloInput : 0));
+                                        (useInput ? Proto.HelloInput : 0) |
+                                        Proto.HelloStatus);  // a refusal comes back as Info, not a silent close
                 ctl.Send(Proto.MakeHello(screen, flags, ptW, ptH));
                 if (profileBytes != null)
                 {
@@ -395,7 +427,24 @@ static unsafe class Program
                 }
                 var welcome = new byte[Proto.MacMsgSize];
                 Proto.ReadExactly(ctl, welcome);
-                if (BinaryPrimitives.ReadUInt32LittleEndian(welcome) != Proto.Welcome)
+                uint first = BinaryPrimitives.ReadUInt32LittleEndian(welcome);
+                if (first == Proto.Info)
+                {
+                    // Info {magic, status, version, macOS, refuse reason, accent} instead of Welcome.
+                    uint refuse = BinaryPrimitives.ReadUInt32LittleEndian(welcome.AsSpan(24));
+                    if (refuse == Proto.RefuseNoScreenRecording)
+                    {
+                        Console.WriteLine("Refused: screen recording");
+                        Console.WriteLine("The Mac can't share its screen yet: on the Mac, turn on USB-C Display in System Settings > " +
+                                          "Privacy & Security > Screen & System Audio Recording.");
+                        exitCode = ExitRefused;
+                        quitting = true;
+                        Win32.PostMessageW(hwnd, Win32.WM_CLOSE, 0, 0);
+                        return;  // the finally below closes the connection
+                    }
+                    throw new InvalidOperationException($"the Mac turned the connection down (reason {refuse})");
+                }
+                if (first != Proto.Welcome)
                     throw new InvalidOperationException("the Mac didn't welcome us (an older Mac side?)");
                 uint token = BinaryPrimitives.ReadUInt32LittleEndian(welcome.AsSpan(4));
                 frm = Discovery.ConnectTo(ep, 2000) ?? throw new InvalidOperationException("could not open the frame connection");
@@ -494,7 +543,7 @@ static unsafe class Program
                     if (!onDisplay && Input.Relative) Input.SawOffDisplay = true;
                     if (Input.Enabled && windowShown && (!onDisplay && !Input.Relative || onDisplay && Input.Relative && Input.SawOffDisplay))
                         Win32.PostMessageW(hwnd, Win32.WM_APP_POINTER, onDisplay ? 0 : 1, (IntPtr)(int)((ushort)mx | (uint)(ushort)my << 16));
-                    // While this laptop's trackpad moves the pointer, the Mac's reports are only
+                    // While this PC's trackpad moves the pointer, the Mac's reports are only
                     // its own echo, a little behind: don't pull the cursor back with them.
                     bool localPointer = Stopwatch.GetTimestamp() - Input.LastLocalPointer < Stopwatch.Frequency * 3 / 10;
                     if (visible && !localPointer && !Input.Relative) Win32.SetCursorPos(winX + mx, winY + my);  // picture pixels = window pixels
@@ -507,6 +556,7 @@ static unsafe class Program
                     {
                         macCursorVisible = show;
                         Win32.PostMessageW(hwnd, Win32.WM_APP_CURSOR, 0, 0);
+                        if (show) AnnouncePointer();
                     }
                     break;
                 }
@@ -548,11 +598,18 @@ static unsafe class Program
                     Input.SetLayout(BinaryPrimitives.ReadUInt64LittleEndian(msg.AsSpan(8)), BinaryPrimitives.ReadUInt64LittleEndian(msg.AsSpan(16)));
                     break;
                 case Proto.InputState:
+                    // The first line is for the setup and the watcher, the second for people.
                     if (BinaryPrimitives.ReadUInt32LittleEndian(msg.AsSpan(4)) == 0)
-                        Console.WriteLine("Mac: allow usbc-display under System Settings > Privacy & Security > Accessibility on the Mac, " +
-                                          "so this laptop's trackpad and keyboard can control it.");
+                    {
+                        Console.WriteLine("Input: not allowed");
+                        Console.WriteLine("Mac: allow USB-C Display in System Settings > Privacy & Security > Device Control and Data Access " +
+                                          "on the Mac, so this PC's keyboard and trackpad can control it.");
+                    }
                     else
-                        Console.WriteLine("Mac: this laptop's trackpad and keyboard are allowed to control it.");
+                    {
+                        Console.WriteLine("Input: allowed");
+                        Console.WriteLine("Mac: this PC's keyboard and trackpad are allowed to control it.");
+                    }
                     break;
                 case Proto.Time:
                 {

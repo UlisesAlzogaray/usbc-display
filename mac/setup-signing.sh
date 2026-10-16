@@ -1,8 +1,14 @@
 #!/bin/bash
-# One-time: creates a local self-signed code-signing certificate, in its own keychain,
-# for build.sh. macOS ties the Screen Recording permission to a program's signature; an
-# ad-hoc signature changes with every build, a certificate signature doesn't. So with
-# this, rebuilding no longer means approving the permission again.
+# The local code-signing certificate build.sh signs with, in its own keychain. macOS ties the
+# Screen Recording and Accessibility permissions to a program's signing certificate: an ad-hoc
+# signature changes with every build, a certificate signature doesn't. So with this, rebuilding
+# no longer means approving the permissions again.
+#
+#   bash setup-signing.sh            checks that the certificate is there (build.sh runs this)
+#   bash setup-signing.sh --create   makes it, once per Mac
+#
+# It is never made again by itself: a new certificate is a new signature, and every privacy entry
+# the old one has (switches already on in System Settings) would stop matching the app.
 set -e
 NAME="USB-C Display Local Signing"
 KEYCHAIN="$HOME/Library/Keychains/usbc-display-signing.keychain-db"
@@ -10,6 +16,12 @@ PASS="usbc-display"  # only protects this keychain, which holds nothing but this
 
 if [ -f "$KEYCHAIN" ] && security find-certificate -c "$NAME" "$KEYCHAIN" >/dev/null 2>&1; then
     exit 0
+fi
+if [ "$1" != "--create" ]; then
+    echo "error: no \"$NAME\" certificate in $KEYCHAIN." >&2
+    echo "error: if this Mac never had one, run \"bash mac/setup-signing.sh --create\" once. If it had one, restore that" >&2
+    echo "error: keychain instead: a new certificate makes the permissions already given to USB-C Display stop matching." >&2
+    exit 1
 fi
 
 TMP=$(mktemp -d)

@@ -4,9 +4,11 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Security;
 using System.Security.Principal;
 using System.Text;
+using System.Threading;
 using System.Xml.Linq;
 
 namespace UsbcSetup;
@@ -21,7 +23,7 @@ namespace UsbcSetup;
 static class Elevation
 {
     public const string RuleName = "USB-C Display (cable only)";
-    const string RuleDescription = "Lets your Mac download USB-C Display from this laptop and find it by name. Only over the USB-C cable.";
+    const string RuleDescription = "Lets your Mac download USB-C Display from this PC and find it by name, only over the cable.";
     const string RemoteAddresses = "fe80::/10,169.254.0.0/16";
     const string TaskFolder = "USB-C Display";
     const string RouterTask = "Restart USB4 link", AdapterTask = "Restart USB4 network adapter";
@@ -35,39 +37,86 @@ static class Elevation
 
     // ---- From the normal (not elevated) app ----
 
-    // Runs this exe elevated with a fixed argument. Returns its exit code; refused = UAC declined.
-    public static int RunElevated(string verb, out bool refused)
+    // Runs this exe elevated with a fixed argument and waits for it. Returns its exit code;
+    // refused = UAC declined. owner: the window the request comes from, so Windows puts its prompt
+    // in front (a request from a window that isn't in front only flashes in the taskbar).
+    // onStarted runs once Windows said yes and the elevated copy is running.
+    public static int RunElevated(string verb, out bool refused, IntPtr owner = default, Action onStarted = null)
     {
         refused = false;
         string sid;
         using (var id = WindowsIdentity.GetCurrent()) sid = id.User?.Value ?? "";
-        var psi = new ProcessStartInfo(ProgramPath, verb == "--elevated" ? $"{verb} {sid}" : verb)
+        var info = new SHELLEXECUTEINFO
         {
-            UseShellExecute = true,
-            Verb = "runas",
-            WindowStyle = ProcessWindowStyle.Hidden,
-            WorkingDirectory = System32,
+            cbSize = Marshal.SizeOf<SHELLEXECUTEINFO>(),
+            fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI,
+            hwnd = owner,
+            lpVerb = "runas",
+            lpFile = ProgramPath,
+            lpParameters = verb == "--elevated" ? $"{verb} {sid}" : verb,
+            lpDirectory = System32,
+            nShow = 0,  // SW_HIDE
         };
-        try
+        // ShellExecuteEx wants a single-threaded apartment (Process.Start does the same).
+        bool ok = false;
+        int error = 0;
+        void Call() { ok = ShellExecuteEx(ref info); error = ok ? 0 : Marshal.GetLastWin32Error(); }
+        if (Thread.CurrentThread.GetApartmentState() == ApartmentState.STA) Call();
+        else
         {
-            using var p = Process.Start(psi);
-            if (p == null) return -1;
-            p.WaitForExit();
-            Log.Write($"elevate: {verb} exited {p.ExitCode}");
-            return p.ExitCode;
+            var t = new Thread(Call) { IsBackground = true, Name = "UAC" };
+            t.SetApartmentState(ApartmentState.STA);
+            t.Start();
+            t.Join();
         }
-        catch (Win32Exception e) when (e.NativeErrorCode == 1223)  // ERROR_CANCELLED: "No" in the UAC prompt
+        if (!ok)
         {
-            refused = true;
-            Log.Write("elevate: refused");
-            return 1223;
-        }
-        catch (Exception e)
-        {
-            Log.Write("elevate: " + e.Message);
+            if (error == 1223)  // ERROR_CANCELLED: "No" in the UAC prompt
+            {
+                refused = true;
+                Log.Write("elevate: refused");
+                return 1223;
+            }
+            Log.Write($"elevate: {verb}: {new Win32Exception(error).Message} ({error})");
             return -1;
         }
+        if (info.hProcess == IntPtr.Zero) return -1;
+        try
+        {
+            try { onStarted?.Invoke(); } catch (Exception e) { Log.Write("elevate: " + e.Message); }
+            WaitForSingleObject(info.hProcess, uint.MaxValue);
+            int code = GetExitCodeProcess(info.hProcess, out uint exit) ? (int)exit : -1;
+            Log.Write($"elevate: {verb} exited {code}");
+            return code;
+        }
+        finally { CloseHandle(info.hProcess); }
     }
+
+    const uint SEE_MASK_NOCLOSEPROCESS = 0x40, SEE_MASK_NOASYNC = 0x100, SEE_MASK_FLAG_NO_UI = 0x400;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct SHELLEXECUTEINFO
+    {
+        public int cbSize;
+        public uint fMask;
+        public IntPtr hwnd;
+        [MarshalAs(UnmanagedType.LPWStr)] public string lpVerb;
+        [MarshalAs(UnmanagedType.LPWStr)] public string lpFile;
+        [MarshalAs(UnmanagedType.LPWStr)] public string lpParameters;
+        [MarshalAs(UnmanagedType.LPWStr)] public string lpDirectory;
+        public int nShow;
+        public IntPtr hInstApp, lpIDList;
+        [MarshalAs(UnmanagedType.LPWStr)] public string lpClass;
+        public IntPtr hkeyClass;
+        public uint dwHotKey;
+        public IntPtr hIconOrMonitor, hProcess;
+    }
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool ShellExecuteEx(ref SHELLEXECUTEINFO info);
+    [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr handle, uint ms);
+    [DllImport("kernel32.dll")] static extern bool GetExitCodeProcess(IntPtr process, out uint code);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
 
     // Both rules are there, enabled, for the installed program. Read through the Windows Firewall
     // API, which needs no admin rights and doesn't depend on the Windows language or code page.
@@ -118,7 +167,7 @@ static class Elevation
         TaskRuns(AdapterTask, RestartArgs(AdapterHardwareId)) &&
         (routerHardwareId == null || TaskRuns(RouterTask, RestartArgs(routerHardwareId)));
 
-    // The admin step counts as done when the firewall rules are in place and, on a laptop with a
+    // The admin step counts as done when the firewall rules are in place and, on a PC with a
     // USB4 router, the recovery tasks too. The rules alone are what the Mac's download needs.
     public static bool Done(bool firewallOk, bool tasksOk, string routerHardwareId) =>
         firewallOk && (routerHardwareId == null || tasksOk);

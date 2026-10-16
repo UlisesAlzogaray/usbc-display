@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
+using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
@@ -18,6 +20,40 @@ static class Payload
         var list = new List<string>();
         foreach (var f in All) if (!Resources.Has("payload/" + f)) list.Add(f);
         return list;
+    }
+
+    // The Mac app this copy serves: the zip's size in bytes and its CFBundleVersion (from the
+    // app's Info.plist inside the zip, else the version this build was made with). (0, "") when
+    // there is no Mac app.
+    public static (long Size, string Version) MacAppInfo()
+    {
+        try
+        {
+            using var s = OpenMacZip(out long size);
+            if (s == null) return (0, "");
+            string version = "";
+            try
+            {
+                using var zip = new ZipArchive(s, ZipArchiveMode.Read, leaveOpen: true);
+                foreach (var e in zip.Entries)
+                {
+                    if (!e.FullName.EndsWith(".app/Contents/Info.plist", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (e.Length > 1 << 20) break;
+                    using var r = new StreamReader(e.Open());
+                    var m = Regex.Match(r.ReadToEnd(), @"<key>\s*CFBundleVersion\s*</key>\s*<string>\s*([^<\s]+)\s*</string>");
+                    if (m.Success) version = m.Groups[1].Value;
+                    break;
+                }
+            }
+            catch (Exception e) { Log.Write("payload: can't read the Mac app's version: " + e.Message); }
+            if (version == "") version = Machine.MacAppVersion;
+            return (size, version);
+        }
+        catch (Exception e)
+        {
+            Log.Write("payload: " + e.Message);
+            return (0, "");
+        }
     }
 
     // This build's Mac app if it carries one, else the installed copy.
@@ -74,12 +110,13 @@ static class Install
         }
     }
 
-    // Copies everything into place. Throws with a message fit to show.
+    // Copies everything into place. Throws on failure: the message goes to the log, and InUse
+    // tells "another copy is open" from anything else.
     public static void Run()
     {
         Log.Write("install: to " + Dir);
         try { Directory.CreateDirectory(Dir); }
-        catch (Exception e) { throw new Exception("Windows didn't let setup create its folder. " + e.Message); }
+        catch (Exception e) { throw new IOException("Windows didn't let setup create its folder: " + e.Message, e); }
         RemoveLeftovers();
         StopInstalled("UsbcWatcher");
 
@@ -135,8 +172,17 @@ static class Install
         }
         catch (Exception e)
         {
-            throw new Exception($"Couldn't put {Path.GetFileName(to)} in place. Close USB-C Display if it's running and try again. ({e.Message})");
+            throw new IOException($"Couldn't put {Path.GetFileName(to)} in place: {e.Message}", e);
         }
+    }
+
+    // A file held open by another program (another copy of USB-C Display, most likely): Windows'
+    // sharing or lock violation, anywhere in the chain.
+    public static bool InUse(Exception e)
+    {
+        for (; e != null; e = e.InnerException)
+            if (e is IOException && (e.HResult & 0xFFFF) is 32 or 33) return true;  // ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION
+        return false;
     }
 
     static void RemoveLeftovers()
@@ -166,7 +212,7 @@ static class Install
             dynamic lnk = shell.CreateShortcut(ShortcutPath);
             lnk.TargetPath = SetupPath;
             lnk.WorkingDirectory = Dir;
-            lnk.Description = "Use this laptop as a screen for your Mac";
+            lnk.Description = "Use this PC as a display for your Mac";
             lnk.IconLocation = SetupPath + ",0";
             lnk.Save();
         }
@@ -232,13 +278,7 @@ static class Install
     // "USB-C Display Setup.exe --uninstall", from Settings > Apps.
     public static int Uninstall()
     {
-        var answer = MessageBox.Show(
-            "Remove USB-C Display from this laptop?\n\n" +
-            "This removes the app, its settings, the cable-only firewall rules and the tasks that " +
-            "restart a stuck cable connection. Windows asks for permission once to remove the last two.\n\n" +
-            "On your Mac, drag USB-C Display from Applications to the Trash.",
-            "Remove USB-C Display", MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2);
-        if (answer != DialogResult.OK) return 1;
+        if (!ConfirmRemove()) return 1;
 
         StopInstalled("UsbcWatcher");
         StopInstalled("UsbcDisplay");
@@ -249,28 +289,85 @@ static class Install
             adminPartRemoved = Elevation.RunElevated("--elevated-remove", out _) == 0;
 
         try { using var k = Registry.CurrentUser.CreateSubKey(RunKey); k.DeleteValue(RunName, false); } catch { }
-        try { Registry.CurrentUser.DeleteSubKeyTree(UninstallKey, false); } catch { }
         try { Registry.CurrentUser.DeleteSubKeyTree(Settings.Key, false); } catch { }
         try { File.Delete(ShortcutPath); } catch { }
         string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         try { Directory.Delete(Path.Combine(local, "USB-C Display"), true); } catch { }  // the wizard's WebView2 data
         try { Directory.Delete(Log.Dir, true); } catch { }                                // logs
 
-        // This exe is running from the folder: a short-lived cmd removes it once we've exited,
-        // trying for about half a minute in case something still holds a file.
-        try
+        if (adminPartRemoved)
         {
-            Process.Start(new ProcessStartInfo("cmd.exe",
-                $"/d /c for /l %i in (1,1,10) do (ping -n 3 127.0.0.1 >nul & rmdir /s /q \"{Dir}\" 2>nul & if not exist \"{Dir}\" exit)")
-                { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Path.GetTempPath() })?.Dispose();
+            try { Registry.CurrentUser.DeleteSubKeyTree(UninstallKey, false); } catch { }
+            // This exe is running from the folder: a short-lived cmd removes it once we've exited,
+            // trying for about half a minute in case something still holds a file.
+            try
+            {
+                Process.Start(new ProcessStartInfo("cmd.exe",
+                    $"/d /c for /l %i in (1,1,10) do (ping -n 3 127.0.0.1 >nul & rmdir /s /q \"{Dir}\" 2>nul & if not exist \"{Dir}\" exit)")
+                    { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Path.GetTempPath() })?.Dispose();
+            }
+            catch { }
         }
-        catch { }
+        else
+        {
+            // The firewall rules and tasks need Windows' permission to go: the Settings > Apps entry
+            // and this exe stay, so removing USB-C Display again can ask for it. The rest goes.
+            try
+            {
+                foreach (var f in Directory.EnumerateFiles(Dir))
+                    if (!string.Equals(Path.GetFullPath(f), Path.GetFullPath(SetupPath), StringComparison.OrdinalIgnoreCase))
+                        try { File.Delete(f); } catch { }
+                using var k = Registry.CurrentUser.OpenSubKey(UninstallKey, true);
+                k?.SetValue("EstimatedSize", (int)(DirSize() / 1024), RegistryValueKind.DWord);
+            }
+            catch { }
+        }
 
-        MessageBox.Show(adminPartRemoved
-                ? "USB-C Display has been removed from this laptop."
-                : "USB-C Display has been removed from this laptop, except the firewall rules and repair tasks, " +
-                  "because Windows didn't get permission. Run the uninstall again to remove them too.",
-            "Remove USB-C Display", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        Removed(adminPartRemoved);
         return 0;
+    }
+
+    // Remove USB-C Display from this PC? The verb on the button, Cancel the default. The app's
+    // own buttons, in its language (Windows' standard ones follow the Windows language); Esc and
+    // the close box still cancel.
+    static bool ConfirmRemove()
+    {
+        var remove = new TaskDialogButton("Remove");
+        var cancel = new TaskDialogButton("Cancel");
+        var page = new TaskDialogPage
+        {
+            AllowCancel = true,
+            Caption = "Remove USB-C Display",
+            Heading = "Remove USB-C Display from this PC?",
+            Text = "This removes the app, its settings, its firewall rules, and the tasks that restart the cable connection " +
+                   "when it stops responding. Windows asks for permission to remove the rules and tasks.",
+            Footnote = new TaskDialogFootnote("To remove USB-C Display from your Mac, drag it from Applications to the Trash."),
+            Buttons = { remove, cancel },
+            DefaultButton = cancel,
+        };
+        using var icon = Program.AppIcon();
+        if (icon != null) page.Icon = new TaskDialogIcon(icon);
+        return TaskDialog.ShowDialog(page, TaskDialogStartupLocation.CenterScreen) == remove;
+    }
+
+    // What was removed (an informational alert: OK is its button).
+    static void Removed(bool all)
+    {
+        var ok = new TaskDialogButton("OK");
+        var page = new TaskDialogPage
+        {
+            AllowCancel = true,
+            Caption = "Remove USB-C Display",
+            // A no-break space keeps "this PC." together when the short heading wraps.
+            Heading = all
+                ? "USB-C Display was removed from this\u00A0PC."
+                : "USB-C Display was removed from this PC, except for its firewall rules and cable tasks, which need permission to remove.",
+            Text = all ? null : "To remove them, remove USB-C Display again in Settings > Apps > Installed apps, then click Yes when Windows asks.",
+            Buttons = { ok },
+            DefaultButton = ok,
+        };
+        using var icon = Program.AppIcon();
+        if (icon != null) page.Icon = new TaskDialogIcon(icon);
+        TaskDialog.ShowDialog(page, TaskDialogStartupLocation.CenterScreen);
     }
 }

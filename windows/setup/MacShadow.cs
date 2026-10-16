@@ -6,28 +6,36 @@ using System.Windows.Forms;
 
 namespace UsbcSetup;
 
-// The setup window's shadow, shaped and sized like a Mac window's: the page draws a Mac window
-// (16 pt corners with macOS's continuous curve) on a transparent canvas, and Windows' own shadow
-// would be a square one, so this draws it instead. It is a separate layered window just below
-// the setup window, with per-pixel alpha, that clicks pass through.
+// The setup window's shadow, the one macOS draws for the Mac's copy of this window after the
+// handover: the page draws a Mac window (16 pt corners with macOS's continuous curve) on a
+// transparent canvas, and Windows' own shadow would be a square one, so this draws it instead.
+// It is a separate layered window just below the setup window, with per-pixel alpha, that clicks
+// pass through.
+//
+// The Mac's copy is a borderless window, and macOS 27.0.1 gives a borderless window the same
+// shadow whether it is key or not (design/research/borderless-shadow.md, measured with
+// tools/shadowtest): a Gaussian blur of the window's shape, sigma 8 pt, 4 pt down, at alpha .31
+// in dark mode and .26 in light mode, plus a crisp rim just outside the edge (about half a point,
+// alpha .66 / .56, not moved down). So this draws one shadow, active or not, and nothing changes
+// at the cut. The theme comes from the page (`chrome`), which follows the Mac's.
 sealed class MacShadow : NativeWindow, IDisposable
 {
-    // Mac points: a Gaussian blur of the window's shape, moved down, at this opacity.
-    // Inactive: measured on macOS 27 (System Settings in the background). Active: macOS's key
-    // window shadow, larger and darker.
-    readonly record struct Look(double Sigma, double Down, double Opacity);
-    static readonly Look Active = new(15, 14, 0.50), Inactive = new(8, 10, 0.38);
+    public readonly record struct Look(double Sigma, double Down, double Opacity, double RimWidth, double RimOpacity);
+    public static readonly Look Dark = new(8, 4, 0.31, 0.5, 0.66), Light = new(8, 4, 0.26, 0.5, 0.56);
+    const double CornerRadius = 16;  // Mac points, continuous (the page's squircle)
 
     readonly Form owner;
     double point;         // one Mac point in panel pixels
-    bool active = true, shown;
+    bool dark, allowed, shown;
     Size builtFor;
-    bool builtActive;
-    int margin, down;
+    double builtPoint;
+    bool builtDark;
+    int margin;
 
-    public MacShadow(Form owner)
+    public MacShadow(Form owner, bool dark)
     {
         this.owner = owner;
+        this.dark = dark;
         var cp = new CreateParams
         {
             Caption = "",
@@ -37,20 +45,19 @@ sealed class MacShadow : NativeWindow, IDisposable
         CreateHandle(cp);
     }
 
-    // From the page: one Mac point in CSS pixels; with the window's DPI, in panel pixels.
-    public void SetPoint(double cssPerPoint, int dpi)
+    // Hidden until the window is revealed (it opens cloaked, SetupWindow).
+    public bool Allowed
     {
-        double p = cssPerPoint * dpi / 96.0;
-        if (Math.Abs(p - point) < 0.001) return;
-        point = p;
-        builtFor = Size.Empty;
-        Follow();
+        get => allowed;
+        set { if (allowed == value) return; allowed = value; Follow(); }
     }
 
-    public void SetActive(bool on)
+    // From the page: one Mac point in panel pixels, and its theme.
+    public void SetLook(double pointPx, bool darkTheme)
     {
-        if (on == active) return;
-        active = on;
+        if (Math.Abs(pointPx - point) < 0.0005 && darkTheme == dark) return;
+        point = pointPx;
+        dark = darkTheme;
         Follow();
     }
 
@@ -58,59 +65,99 @@ sealed class MacShadow : NativeWindow, IDisposable
     public void Follow()
     {
         if (Handle == IntPtr.Zero || owner.IsDisposed || !owner.IsHandleCreated) return;
-        bool show = point > 0 && owner.Visible && owner.WindowState == FormWindowState.Normal;
+        bool show = allowed && point > 0 && owner.Visible && owner.WindowState == FormWindowState.Normal;
         if (!show)
         {
             if (shown) { ShowWindow(Handle, 0); shown = false; }
+            // Drawn while hidden (UpdateLayeredWindow works on a hidden window), so showing it, at
+            // the reveal or the hand-off, is only a SetWindowPos, not a blur.
+            if (point > 0 && owner.WindowState == FormWindowState.Normal && NeedsBuild(owner.Bounds.Size)) Build(owner.Bounds.Size);
             return;
         }
         var b = owner.Bounds;
-        if (b.Size != builtFor || active != builtActive) Build(b.Size);
-        SetWindowPos(Handle, owner.Handle, b.X - margin, b.Y - margin + down, 0, 0, 0x0001u | 0x0010u | (shown ? 0u : 0x0040u));  // NOSIZE, NOACTIVATE, SHOWWINDOW
+        if (NeedsBuild(b.Size)) Build(b.Size);
+        SetWindowPos(Handle, owner.Handle, b.X - margin, b.Y - margin, 0, 0, 0x0001u | 0x0010u | (shown ? 0u : 0x0040u));  // NOSIZE, NOACTIVATE, SHOWWINDOW
         shown = true;
     }
 
+    bool NeedsBuild(Size window) => window != builtFor || point != builtPoint || dark != builtDark;
+
     void Build(Size window)
     {
-        var look = active ? Active : Inactive;
-        double sigma = look.Sigma * point;
-        down = (int)Math.Round(look.Down * point);
-        margin = (int)Math.Ceiling(sigma * 3) + 2;
-        int w = window.Width + 2 * margin, h = window.Height + 2 * margin;
+        var px = Render(window, point, dark ? Dark : Light, out margin, out Size size);
+        Upload(px, size.Width, size.Height);
+        builtFor = window;
+        builtPoint = point;
+        builtDark = dark;
+    }
 
-        // The window's shape, as alpha.
-        var alpha = new byte[w * h];
-        using (var bmp = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+    // The shadow of a window this size, as premultiplied BGRA black, with the window's top-left
+    // corner at (margin, margin). Public for tests (it touches no window).
+    public static byte[] Render(Size window, double point, Look look, out int margin, out Size size)
+    {
+        double sigma = look.Sigma * point, down = look.Down * point;
+        int m = (int)Math.Ceiling(sigma * 3 + down) + 2;
+        margin = m;
+        int w = window.Width + 2 * m, h = window.Height + 2 * m;
+        size = new Size(w, h);
+        double R = CornerRadius * point;
+
+        // The Gaussian part: the window's shape, moved down, blurred.
+        var shape = Coverage(w, h, g =>
         {
-            using (var g = Graphics.FromImage(bmp))
-            {
-                g.SmoothingMode = SmoothingMode.AntiAlias;
-                g.Clear(Color.Transparent);
-                using var path = Squircle(margin, margin, window.Width, window.Height, 16 * point, 0.5);
-                using var brush = new SolidBrush(Color.Black);
-                g.FillPath(brush, path);
-            }
-            var data = bmp.LockBits(new Rectangle(0, 0, w, h), System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using var path = Squircle(m, (float)(m + down), window.Width, window.Height, R, 0.5);
+            g.FillPath(Brushes.Black, path);
+        });
+        var a = new float[w * h];
+        for (int i = 0; i < a.Length; i++) a[i] = shape[i] / 255f;
+        foreach (int r in BoxRadii(sigma)) { BoxH(a, w, h, r); BoxV(a, w, h, r); }
+
+        // The rim: a thin ring just outside the window's edge, where it is (not moved down).
+        double rw = look.RimWidth * point;
+        var rim = rw <= 0 ? null : Coverage(w, h, g =>
+        {
+            using var path = Squircle((float)(m - rw), (float)(m - rw), (float)(window.Width + 2 * rw), (float)(window.Height + 2 * rw), R + rw, 0.5);
+            using var inner = Squircle(m, m, window.Width, window.Height, R, 0.5);
+            path.AddPath(inner, false);
+            path.FillMode = FillMode.Alternate;
+            g.FillPath(Brushes.Black, path);
+        });
+
+        var px = new byte[w * h * 4];
+        for (int i = 0; i < a.Length; i++)
+        {
+            double g = Math.Clamp(a[i], 0, 1) * look.Opacity;
+            double r = rim == null ? 0 : rim[i] / 255.0 * look.RimOpacity;
+            double t = 1 - (1 - g) * (1 - r);
+            px[i * 4 + 3] = (byte)Math.Clamp(t * 255 + 0.5, 0, 255);
+        }
+        return px;
+    }
+
+    // What a drawing covers, per pixel (0-255), antialiased.
+    static byte[] Coverage(int w, int h, Action<Graphics> draw)
+    {
+        var alpha = new byte[w * h];
+        using var bmp = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;  // pixel centres at +0.5, as in the page
+            g.Clear(Color.Transparent);
+            draw(g);
+        }
+        var data = bmp.LockBits(new Rectangle(0, 0, w, h), System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        try
+        {
             var row = new byte[w * 4];
             for (int y = 0; y < h; y++)
             {
                 Marshal.Copy(data.Scan0 + y * data.Stride, row, 0, row.Length);
                 for (int x = 0; x < w; x++) alpha[y * w + x] = row[x * 4 + 3];
             }
-            bmp.UnlockBits(data);
         }
-
-        // Gaussian blur: three box blurs each way.
-        var a = new float[w * h];
-        for (int i = 0; i < a.Length; i++) a[i] = alpha[i];
-        foreach (int r in BoxRadii(sigma)) { BoxH(a, w, h, r); BoxV(a, w, h, r); }
-
-        // Premultiplied black at that alpha.
-        var px = new byte[w * h * 4];
-        for (int i = 0; i < a.Length; i++) px[i * 4 + 3] = (byte)Math.Clamp(a[i] * look.Opacity + 0.5, 0, 255);
-        Upload(px, w, h);
-        builtFor = window;
-        builtActive = active;
+        finally { bmp.UnlockBits(data); }
+        return alpha;
     }
 
     // macOS's window corner: the same path as the page's (app.js squircle), Figma's corner smoothing.
