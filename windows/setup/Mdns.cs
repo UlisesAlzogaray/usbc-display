@@ -12,7 +12,7 @@ namespace UsbcSetup;
 // shares UDP 5353 with Windows' own mDNS (address reuse) and ignores packets from other networks.
 //
 // It also notices the Mac's own mDNS traffic: a packet from a 169.254 address on the cable is
-// proof the Mac has its IPv4 address there (it takes ~20 s after plugging in, PLAN.md:117).
+// proof the Mac has its IPv4 address there (it takes ~20 s after plugging in, developers/PLAN.md:117).
 sealed class Mdns
 {
     public const string HostName = "usbc.local";

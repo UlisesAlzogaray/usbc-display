@@ -1,6 +1,6 @@
 # Plan: make the laptop look and feel like the MacBook's own screen
 
-## Status, 2026-10-15 (done the same day; details and numbers in README.md)
+## Status, 2026-10-15 (done the same day; details and numbers in HOW-IT-WORKS.md, which was the README then)
 
 | Stage | Outcome |
 |---|---|

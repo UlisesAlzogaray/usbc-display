@@ -114,7 +114,7 @@ opens on the first screen still needed.
 | Where | What | Why | Without it |
 |---|---|---|---|
 | This PC, Windows admin (one prompt) | Firewall rules "USB-C Display (cable only)": TCP 80 and UDP 5353 in, only from link-local addresses (the cable), only for this app | The Mac downloads its app from this PC and finds it as `usbc.local` | The Mac can't reach this PC, so it can't get the app |
-| Same prompt | Tasks `\USB-C Display\Restart USB4 link` and `...network adapter`: each runs one fixed `pnputil /restart-device` as SYSTEM; your account may start them, not change them | Restarts a stuck cable connection silently (see the main README) | Each freeze needs an admin prompt or reconnecting the cable |
+| Same prompt | Tasks `\USB-C Display\Restart USB4 link` and `...network adapter`: each runs one fixed `pnputil /restart-device` as SYSTEM; your account may start them, not change them | Restarts a stuck cable connection silently (see developers/HOW-IT-WORKS.md) | Each freeze needs an admin prompt or reconnecting the cable |
 | Mac | Screen & System Audio Recording | Sends the Mac desktop to this PC | A black display |
 | Mac | Device Control and Data Access (Accessibility), optional | This PC's keyboard and trackpad control the Mac | Use the Mac's own pointer and keyboard |
 | Mac | Login item | The Mac side is ready whenever the cable goes in | Open the app by hand each time |
