@@ -123,7 +123,7 @@ enum { HELLO_CAN_H264 = 1, HELLO_TEST_CARD = 2,
 // sends it again whenever a bit changes. More QUERYs on the same connection run more actions.
 #define MAGIC_QUERY  0x51444355u // "UCDQ"
 #define MAGIC_STATUS 0x49444355u // "UCDI"
-#define APP_VERSION 2            // the app's build number; build.sh copies it into Info.plist
+#define APP_VERSION 3            // the app's build number; build.sh copies it into Info.plist
 enum { ST_SCREEN_OK = 1, ST_AX_OK = 2, ST_SCREEN_PROMPTED = 4, ST_AX_PROMPTED = 8,
        ST_LOGIN_ITEM_ENABLED = 16, ST_LOGIN_ITEM_NEEDS_APPROVAL = 32, ST_SESSION_ACTIVE = 64,
        ST_RUNNING_AS_AGENT = 128, ST_IN_APPLICATIONS = 256, ST_SCREEN_NEEDS_RELAUNCH = 512 };
@@ -1569,7 +1569,8 @@ static void logStats(double secs) {
 // ---- First-run setup: status for the laptop's setup app, and the actions it asks for ----
 // windows/setup/CONTRACT.md section 1. Nothing here needs Screen Recording or a session.
 #define AGENT_LABEL @"com.usbc-display.sender"
-#define AGENT_PLIST @"com.usbc-display.sender.plist"  // in the app: Contents/Library/LaunchAgents
+#define AGENT_PLIST @"com.usbc-display.sender.plist"  // in the app: Contents/Library/LaunchAgents (before version 3)
+#define APP_AGENT_LABEL @"com.usbc-display.agent"     // the app's login agent since version 3
 #define APP_IN_APPLICATIONS @"/Applications/USB-C Display.app"
 static pthread_mutex_t gStatusLock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t gFreshCheckNs;
@@ -1615,6 +1616,34 @@ static int runTool(const char *const argv[]) {  // waits; the exit code, or -1
     return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
 }
 
+// Waits; what it printed, or nil. Its errors are dropped: launchctl's are expected (asking
+// about an agent that isn't loaded) and would only fill the log.
+static NSString *toolOutput(const char *const argv[]) {
+    int p[2];
+    if (pipe(p) != 0) return nil;
+    posix_spawnattr_t a;
+    posix_spawnattr_init(&a);
+    posix_spawnattr_setflags(&a, POSIX_SPAWN_CLOEXEC_DEFAULT);
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addinherit_np(&fa, 0);
+    posix_spawn_file_actions_adddup2(&fa, p[1], 1);
+    posix_spawn_file_actions_addopen(&fa, 2, "/dev/null", O_WRONLY, 0);
+    pid_t pid = -1;
+    if (posix_spawn(&pid, argv[0], &fa, &a, (char *const *)argv, *_NSGetEnviron()) != 0) pid = -1;
+    posix_spawn_file_actions_destroy(&fa);
+    posix_spawnattr_destroy(&a);
+    close(p[1]);
+    NSMutableData *d = [NSMutableData data];
+    char buf[4096];
+    for (ssize_t n; pid > 0 && ((n = read(p[0], buf, sizeof buf)) > 0 || (n < 0 && errno == EINTR));)
+        if (n > 0) [d appendBytes:buf length:(NSUInteger)n];
+    close(p[0]);
+    if (pid < 0) return nil;
+    while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {}
+    return [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];
+}
+
 static void setCloexec(int fd) { fcntl(fd, F_SETFD, FD_CLOEXEC); }
 
 // macOS applies a new Screen Recording grant only to processes started after it, so this
@@ -1653,23 +1682,27 @@ static BOOL inApplications(void) {
     return gInBundle && [NSBundle.mainBundle.bundlePath hasPrefix:@"/Applications/"];
 }
 
-static NSString *legacyAgentPlist(void) {  // install-agent.sh, and the app's own on macOS 12
+static NSString *launchAgentPlist(NSString *label) {
 #ifdef USBC_TEST_LOOPBACK
     if (getenv("USBC_TEST_HOME"))  // test builds: lets a test flip LOGIN_ITEM_ENABLED
-        return [NSString stringWithFormat:@"%s/Library/LaunchAgents/%@.plist", getenv("USBC_TEST_HOME"), AGENT_LABEL];
+        return [NSString stringWithFormat:@"%s/Library/LaunchAgents/%@.plist", getenv("USBC_TEST_HOME"), label];
 #endif
-    return [NSHomeDirectory() stringByAppendingFormat:@"/Library/LaunchAgents/%@.plist", AGENT_LABEL];
+    return [NSHomeDirectory() stringByAppendingFormat:@"/Library/LaunchAgents/%@.plist", label];
 }
+// install-agent.sh's (the bare program), and the app's own before version 3 on macOS 12.
+static NSString *legacyAgentPlist(void) { return launchAgentPlist(AGENT_LABEL); }
+// The app's login agent since version 3, on every macOS.
+static NSString *appAgentPlist(void) { return launchAgentPlist(APP_AGENT_LABEL); }
 
 static uint32_t loginItemBits(void) {
+    NSString *plist = appAgentPlist();
+    BOOL mine = [NSFileManager.defaultManager fileExistsAtPath:plist];
     if (@available(macOS 13.0, *)) {
-        if (gInBundle) {
-            SMAppServiceStatus s = [SMAppService agentServiceWithPlistName:AGENT_PLIST].status;
-            if (s == SMAppServiceStatusEnabled) return ST_LOGIN_ITEM_ENABLED;
-            if (s == SMAppServiceStatusRequiresApproval) return ST_LOGIN_ITEM_NEEDS_APPROVAL;
-        }
+        // Switched off in Login Items: launchd keeps the plist but won't run it.
+        if (mine && [SMAppService statusForLegacyURL:[NSURL fileURLWithPath:plist]] == SMAppServiceStatusRequiresApproval)
+            return ST_LOGIN_ITEM_NEEDS_APPROVAL;
     }
-    return [NSFileManager.defaultManager fileExistsAtPath:legacyAgentPlist()] ? ST_LOGIN_ITEM_ENABLED : 0;
+    return mine || [NSFileManager.defaultManager fileExistsAtPath:legacyAgentPlist()] ? ST_LOGIN_ITEM_ENABLED : 0;
 }
 
 static uint32_t currentStatus(void) {
@@ -1765,9 +1798,15 @@ static BOOL runAsAdmin(NSString *cmd) {
     return done;
 }
 
-// The download flag makes macOS run the app from a read-only copy wherever it is.
+// The download flag, on the app or anything inside it. It makes macOS run the app from a
+// read-only copy wherever it is, and launchd never starts a flagged login agent (the copy still
+// opens fine from Finder). Finder and Safari flag every file, so the folder alone isn't enough.
 static BOOL quarantined(NSString *path) {
-    return getxattr(path.fileSystemRepresentation, "com.apple.quarantine", NULL, 0, 0, XATTR_NOFOLLOW) >= 0;
+    if (getxattr(path.fileSystemRepresentation, "com.apple.quarantine", NULL, 0, 0, XATTR_NOFOLLOW) >= 0) return YES;
+    for (NSString *item in [NSFileManager.defaultManager enumeratorAtPath:path])
+        if (getxattr([path stringByAppendingPathComponent:item].fileSystemRepresentation, "com.apple.quarantine", NULL, 0, 0, XATTR_NOFOLLOW) >= 0)
+            return YES;
+    return NO;
 }
 
 static NSString *ownTo(NSString *path) {  // shell: give the copy to this account, so updates need no password
@@ -1783,7 +1822,9 @@ static BOOL clearQuarantine(NSString *path) {
 }
 
 // Copies the app to /Applications (asking for an administrator's password if this account
-// can't write there), then starts it from there and quits.
+// can't write there), then starts it from there and quits. The copy in Downloads stays: removing
+// it would make macOS ask for access to the Downloads folder, and opening it again only opens
+// the copy in Applications.
 static void moveToApplications(void) {
     if (!gInBundle || inApplications()) {
         printf(gInBundle ? "Already in Applications.\n" : "Only USB-C Display.app can move itself to Applications.\n");
@@ -1810,18 +1851,16 @@ static void moveToApplications(void) {
                              shellQuoted(dest), shellQuoted(here), shellQuoted(dest), shellQuoted(dest), ownTo(dest)]);
         }
         if (!ok) { gBusy = NO; return; }
-        if (![from hasPrefix:@"/Applications/"] && [fm fileExistsAtPath:from])
-            [fm trashItemAtURL:[NSURL fileURLWithPath:from] resultingItemURL:nil error:nil];
         printf("Copied to %s.\n", dest.UTF8String);
     }
-    // Copied by a program, not by Finder: without this macOS would run it from a read-only
-    // copy again, and the setup would ask to move it forever.
+    // Copied by a program or dragged by Finder, the copy keeps the download flag: macOS would run
+    // it from a read-only copy again, and never start it as the login agent.
     if (!clearQuarantine(dest)) {
         printf("%s is still flagged as downloaded; not starting it from there.\n", dest.UTF8String);
         gBusy = NO;
         return;
     }
-    openAndQuit(dest);  // an agent registered from the old place is replaced by the new copy
+    openAndQuit(dest);  // the new copy sets up (or restarts) the login agent
     gBusy = NO;
 }
 
@@ -1983,13 +2022,24 @@ static void noteAgentVersion(void) {
     [[NSString stringWithFormat:@"%d", APP_VERSION] writeToFile:f atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
 
+// Whether launchd runs the login agent now, waiting up to `seconds` for it to start. An agent
+// can be set up and switched on and still never start: then nothing would answer the laptop.
+static BOOL agentRunning(double seconds) {
+    NSString *service = [NSString stringWithFormat:@"gui/%u/%@", getuid(), APP_AGENT_LABEL];
+    const char *print[] = { "/bin/launchctl", "print", service.UTF8String, NULL };
+    for (uint64_t until = nowNs() + (uint64_t)(seconds * NSEC_PER_SEC);; usleep(250000)) {
+        if ([toolOutput(print) containsString:@"\n\tstate = running\n"]) return YES;
+        if (nowNs() >= until) return NO;
+    }
+}
+
 // Started from Finder, or by macOS after "Quit & Reopen": makes sure the login agent is set up
 // to run this copy of the app. YES when the agent takes care of everything and this copy can
 // quit; NO when this copy should answer the setup app itself meanwhile.
 static BOOL setUpLoginAgent(void) {
     NSString *bundle = NSBundle.mainBundle.bundlePath;
     if (!inApplications()) {
-        printf("Running from %s, not from Applications: the laptop's setup will move it.\n", bundle.UTF8String);
+        printf("Running from %s, not from Applications: the laptop's setup can ask it to move again.\n", bundle.UTF8String);
         return NO;
     }
     NSFileManager *fm = NSFileManager.defaultManager;
@@ -2000,54 +2050,58 @@ static BOOL setUpLoginAgent(void) {
                "\"bash mac/install-agent.sh --remove\" first to use the app instead.\n");
         return NO;
     }
+    NSString *domain = [NSString stringWithFormat:@"gui/%u", getuid()];
+    if (legacyArgs) {  // written by this app on macOS 12, before version 3
+        const char *bootout[] = { "/bin/launchctl", "bootout", [domain stringByAppendingFormat:@"/%@", AGENT_LABEL].UTF8String, NULL };
+        toolOutput(bootout);
+        [fm removeItemAtPath:legacy error:nil];
+    }
+    // Versions before 3 registered the agent with SMAppService. launchd finds that agent's
+    // program through the app's registration, which breaks when the app is replaced (an
+    // update) or deleted and put back: the agent then never starts. The plist below names the
+    // program by its path instead.
     if (@available(macOS 13.0, *)) {
-        if (legacyArgs) {  // written by this app on macOS 12, before an upgrade
-            const char *bootout[] = { "/bin/launchctl", "bootout", [NSString stringWithFormat:@"gui/%u/%@", getuid(), AGENT_LABEL].UTF8String, NULL };
-            runTool(bootout);
-            [fm removeItemAtPath:legacy error:nil];
+        SMAppService *old = [SMAppService agentServiceWithPlistName:AGENT_PLIST];
+        if (old.status != SMAppServiceStatusNotRegistered && old.status != SMAppServiceStatusNotFound) {
+            printf("Switching off the login agent of an earlier version.\n");
+            [old unregisterAndReturnError:nil];
         }
-        SMAppService *agent = [SMAppService agentServiceWithPlistName:AGENT_PLIST];
-        NSString *dir = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/USB-C Display"];
-        NSString *mark = [dir stringByAppendingPathComponent:@"agent-app-path"];
-        BOOL same = [[NSString stringWithContentsOfFile:mark encoding:NSUTF8StringEncoding error:nil] isEqualToString:bundle];
-        SMAppServiceStatus s = agent.status;
-        // An update put a new version here: the running agent is the old one, maybe from the Trash.
-        BOOL current = agentVersionMatches();
-        if (same && current && s == SMAppServiceStatusEnabled) return YES;
-        if (same && !current) printf("Updated to version %d; restarting the login agent.\n", APP_VERSION);
-        if (same && s == SMAppServiceStatusRequiresApproval) {
+    }
+    // Dragged here by Finder, the copy keeps the download flag, and launchd doesn't start a
+    // flagged program.
+    if (quarantined(bundle) && !clearQuarantine(bundle)) {
+        printf("This copy is still flagged as downloaded, so macOS won't start it as the login agent.\n");
+        return NO;
+    }
+    NSString *plist = appAgentPlist(), *exe = NSBundle.mainBundle.executablePath;
+    NSArray *args = [NSDictionary dictionaryWithContentsOfFile:plist][@"ProgramArguments"];
+    BOOL same = [args.firstObject isEqualToString:exe] && agentVersionMatches();
+    if (same && agentRunning(3)) return YES;
+    if (@available(macOS 13.0, *)) {
+        if (args && [SMAppService statusForLegacyURL:[NSURL fileURLWithPath:plist]] == SMAppServiceStatusRequiresApproval) {
             printf("The login agent is switched off in System Settings > General > Login Items.\n");
             return NO;
         }
-        if (s != SMAppServiceStatusNotRegistered && s != SMAppServiceStatusNotFound)
-            [agent unregisterAndReturnError:nil];  // registered from another copy of the app
-        NSError *err = nil;
-        BOOL ok = [agent registerAndReturnError:&err];
-        [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
-        [bundle writeToFile:mark atomically:YES encoding:NSUTF8StringEncoding error:nil];
-        noteAgentVersion();
-        s = agent.status;
-        printf("Login agent %s%s%s.\n", s == SMAppServiceStatusEnabled ? "registered" :
-               s == SMAppServiceStatusRequiresApproval ? "registered, but switched off in Login Items" : "not registered",
-               ok ? "" : ": ", ok ? "" : err.localizedDescription.UTF8String);
-        return s == SMAppServiceStatusEnabled;
     }
-    // macOS 12: a LaunchAgent plist of our own.
-    NSString *exe = NSBundle.mainBundle.executablePath;
-    if ([legacyArgs.firstObject isEqualToString:exe] && agentVersionMatches()) return YES;
-    NSDictionary *plist = @{ @"Label": AGENT_LABEL, @"ProgramArguments": @[ exe, @"--agent" ],
-                             @"RunAtLoad": @YES, @"KeepAlive": @YES, @"LimitLoadToSessionType": @"Aqua",
-                             @"ProcessType": @"Interactive", @"AssociatedBundleIdentifiers": @[ AGENT_LABEL ] };
-    [fm createDirectoryAtPath:legacy.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:nil];
-    NSString *domain = [NSString stringWithFormat:@"gui/%u", getuid()];
-    const char *bootout[] = { "/bin/launchctl", "bootout", [domain stringByAppendingFormat:@"/%@", AGENT_LABEL].UTF8String, NULL };
-    runTool(bootout);
-    if (![plist writeToFile:legacy atomically:YES]) return NO;
-    const char *bootstrap[] = { "/bin/launchctl", "bootstrap", domain.UTF8String, legacy.fileSystemRepresentation, NULL };
+    if (same) printf("The login agent isn't running; starting it again.\n");
+    else if (args) printf("Updated to version %d; restarting the login agent.\n", APP_VERSION);
+    NSDictionary *job = @{ @"Label": APP_AGENT_LABEL, @"ProgramArguments": @[ exe, @"--agent" ],
+                           @"RunAtLoad": @YES, @"KeepAlive": @YES, @"LimitLoadToSessionType": @"Aqua",
+                           @"ProcessType": @"Interactive", @"AssociatedBundleIdentifiers": @[ AGENT_LABEL ] };
+    [fm createDirectoryAtPath:plist.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:nil];
+    const char *bootout[] = { "/bin/launchctl", "bootout", [domain stringByAppendingFormat:@"/%@", APP_AGENT_LABEL].UTF8String, NULL };
+    toolOutput(bootout);  // the old version, or a stuck one (an error if none is loaded)
+    if (![job writeToFile:plist atomically:YES]) {
+        printf("Could not write %s.\n", plist.UTF8String);
+        return NO;
+    }
+    const char *bootstrap[] = { "/bin/launchctl", "bootstrap", domain.UTF8String, plist.fileSystemRepresentation, NULL };
     BOOL ok = runTool(bootstrap) == 0;
     if (ok) noteAgentVersion();
-    printf("Login agent %s.\n", ok ? "installed" : "could not be started");
-    return ok;
+    printf("Login agent %s.\n", ok ? "installed" : "could not be loaded");
+    if (ok && agentRunning(8)) return YES;
+    printf("The login agent didn't start; this copy answers the laptop itself.\n");
+    return NO;
 }
 
 // The bundled app logs to ~/Library/Logs/USB-C Display.log (the agent's plist can't name a
@@ -2428,10 +2482,10 @@ static void serveForever(void) {
             pthread_mutex_unlock(&gSessLock);
             if (idle && gDisplayExpires && nowNs() > gDisplayExpires) removeDisplay();
             // A copy of the app answering while the login agent couldn't: once the agent is
-            // switched on, it takes over.
+            // switched on and running (it waits for this port), it takes over.
             if (s < 0 && idle && gInBundle && !gAgent && inApplications() && nowNs() - lastAgentCheck > 2 * NSEC_PER_SEC) {
                 lastAgentCheck = nowNs();
-                if (loginItemBits() & ST_LOGIN_ITEM_ENABLED) {
+                if ((loginItemBits() & ST_LOGIN_ITEM_ENABLED) && agentRunning(0)) {
                     printf("The login agent is on now; leaving the port to it.\n");
                     exit(0);
                 }
@@ -2522,24 +2576,6 @@ static void serveForever(void) {
     }
 }
 
-static void offerUpdate(void) {
-    NSString *from = originalBundlePath();
-    NSString *there = [NSBundle bundleWithPath:APP_IN_APPLICATIONS].infoDictionary[@"CFBundleVersion"];
-    if ([from hasPrefix:@"/Applications/"]) {  // only the download flag is wrong
-        moveToApplications();
-        return;
-    }
-    if (!there || there.integerValue >= APP_VERSION) return;  // a first install: the setup guides the move
-    printf("Version %ld is in Applications; this is version %d.\n", (long)there.integerValue, APP_VERSION);
-    [NSApp activateIgnoringOtherApps:YES];
-    NSAlert *a = [NSAlert new];
-    a.messageText = @"Update USB-C Display?";
-    a.informativeText = @"This is a newer version than the one in your Applications folder. Update it now?";
-    [a addButtonWithTitle:@"Update"];
-    [a addButtonWithTitle:@"Not Now"];
-    if ([a runModal] == NSAlertFirstButtonReturn) moveToApplications();
-}
-
 int main(int argc, const char *argv[]) {
     // Run by screenAllowedForNewProcess: does a new process get to record the screen?
     if (argc == 2 && !strcmp(argv[1], "--screen-check")) return CGPreflightScreenCaptureAccess() ? 0 : 1;
@@ -2580,7 +2616,8 @@ int main(int argc, const char *argv[]) {
         // Plists written by older install-agent.sh have no --agent: launchd is the parent there.
         // launchd names the job in XPC_SERVICE_NAME, should --agent ever not arrive.
         const char *job = getenv("XPC_SERVICE_NAME");
-        gAgent = agentArg || (job && !strcmp(job, AGENT_LABEL.UTF8String)) || (!gInBundle && getppid() == 1);
+        gAgent = agentArg || (job && (!strcmp(job, AGENT_LABEL.UTF8String) || !strcmp(job, APP_AGENT_LABEL.UTF8String))) ||
+                 (!gInBundle && getppid() == 1);
         if (gInBundle) logToLibrary(YES);
         setvbuf(stdout, NULL, _IOLBF, 0);  // keep the log file current when piped through tee
         gCtlQueue = dispatch_queue_create("control", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
@@ -2591,9 +2628,13 @@ int main(int argc, const char *argv[]) {
         [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
         printf("USB-C Display (Mac side) %d, %s\n", APP_VERSION, gAgent ? "running as a login agent" :
                gInBundle ? "started from Finder" : "started from a terminal");
-        // A newer download opened outside Applications updates the copy there right away: the
-        // old agent holds the port, so the laptop's setup can't reach this copy to ask.
-        if (gInBundle && !gAgent && !inApplications()) offerUpdate();
+        // Opened where Safari saved it: move to Applications and start from there right away, so
+        // nobody has to drag it. This also updates an older copy there. The laptop's setup only
+        // asks (and offers to try again) when this didn't work.
+        if (gInBundle && !gAgent && !inApplications()) {
+            printf("Opened outside Applications; moving there.\n");
+            moveToApplications();  // starts the copy in Applications and quits, unless it couldn't
+        }
         // The app started from Finder sets up the login agent and leaves the rest to it.
         if (gInBundle && !gAgent && setUpLoginAgent()) {
             printf("The login agent runs USB-C Display from now on; this copy quits.\n");

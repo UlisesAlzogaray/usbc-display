@@ -120,18 +120,30 @@ what you actually saw when it differs (exact dialog text, button names, timings)
 - [ ] The laptop notices the app (mac.reachable) within a few seconds of it opening.
 
 ### 9. Move the app
-- [ ] "Move it for me" moves the app to /Applications and it opens from there.
-- [ ] Does the Mac ask for a password? "Access files in your Downloads folder?"
-- [ ] The moved app is not flagged as downloaded (`xattr -l /Applications/USB-C\ Display.app`
-      shows no com.apple.quarantine) and doesn't loop.
+Since Mac app version 3 the app moves itself when it's opened outside Applications; this step
+only shows when that failed. Tested over SSH on macOS 27.0.1 (Oct 2026), with Safari's download
+flags copied onto the test copy (`01c3` on the folder, `00c3`/`0083` inside):
+- [x] Opened from Downloads (run from a read-only copy): copies itself to /Applications, clears
+      the flags on every file, starts from there, sets up the agent, and the laptop connects.
+      No prompt on an administrator account; the Downloads copy stays (removing it made macOS
+      ask for access to the Downloads folder).
+- [x] Opened from Downloads again with everything installed: hands over to the copy in
+      Applications, the running agent isn't touched.
+- [x] Reinstall over leftovers (app deleted, an SMAppService registration and old notes left
+      behind): switches the old registration off and sets up its own agent.
+- [x] Dragged to Applications by hand (all 13 items flagged): the app clears its own flags with
+      no prompt and the agent starts.
+- [x] Agent stopped but recorded as set up: "isn't running; starting it again".
 - [ ] Standard Mac account: what does the administrator fallback show?
+- [ ] The "Move it for me" fallback after a failed move (cancelled password prompt).
 
 ### 10. Start automatically
-- [ ] The login item turns on without asking, or "Background Items Added" appears.
+- [ ] "Background Items Added" appears (the agent is a plist in ~/Library/LaunchAgents since
+      version 3) and Login Items lists it under the app's name.
 - [ ] Switch it off in Login Items: the laptop notices and "Open Login Items on my Mac" works.
-- [ ] `launchctl print gui/$(id -u)/com.usbc-display.sender` shows the agent running, and the
-      Finder copy quits once the agent is on (log: "leaving the port to it").
-- [ ] Is `XPC_SERVICE_NAME` set to the label for the agent? (Log says "running as a login agent".)
+- [x] `launchctl print gui/$(id -u)/com.usbc-display.agent` shows the agent running, and the
+      Finder copy quits only once it is (Oct 2026).
+- [x] The agent's log says "running as a login agent" (`--agent`).
 
 ### 11. Share the picture (Screen Recording)
 - [ ] "Open it on my Mac" shows macOS's Screen Recording prompt the first time, the Settings pane after.
@@ -168,10 +180,12 @@ what you actually saw when it differs (exact dialog text, button names, timings)
 - [ ] Unplug mid-setup: "The cable is unplugged" replaces the buttons; plugging back resumes.
 - [ ] Lid closed on the Mac with the laptop as a screen.
 - [ ] A few weeks later: macOS 15+ asks again to "Continue to allow" screen recording.
-- [ ] An older Mac app (from an earlier build) already in /Applications: the laptop says it needs
-      updating, the new download offers "Update USB-C Display?", and the agent restarts on the new version.
+- [x] An older Mac app (version 2) already in /Applications: the new download replaces it with no
+      prompt (Oct 2026). Its SMAppService agent didn't start again afterwards, which is why
+      version 3 has its own plist; replacing a version 3 copy with a later one is still to test.
 - [ ] Uninstall from Settings > Apps: files, tasks, firewall rules, Run key and Start menu entry gone.
-- [ ] Mac removal: delete the app, remove the login item, and reset permissions
+- [ ] Mac removal: `launchctl bootout gui/$(id -u)/com.usbc-display.agent`, delete
+      `~/Library/LaunchAgents/com.usbc-display.agent.plist` and the app, and reset permissions
       (`tccutil reset ScreenCapture com.usbc-display.sender`, same for `Accessibility`).
 - [ ] 4 setup windows opened and killed in a row: the Mac drops the oldest probe and still answers.
 
@@ -185,7 +199,7 @@ Each of these was assumed, not tested. Write down the answer.
 - [ ] Whether the built-in Windows "mDNS (UDP-In)" Public rule is on.
 - [ ] Whether port 80 is free with http.sys.
 - [ ] Transparent WebView2 over Mica.
-- [ ] Quit & Reopen behaviour with a SMAppService agent.
+- [ ] Quit & Reopen behaviour with the login agent.
 - [ ] Smart App Control behaviour for an unsigned setup exe.
 - [ ] Which Windows builds and vendors expose the USB4 P2P network adapter.
 - [ ] Where macOS places the virtual display by default.
@@ -197,6 +211,5 @@ Each of these was assumed, not tested. Write down the answer.
 - [ ] The USB4 adapter's interface type (if it's "wired LAN", the firewall rule can add `interfacetype=lan`).
 - [ ] WebView2: `app-region` drag, `offset-path`, `color-mix`, `:has()` on the installed runtime.
 - [ ] The handoff to the installed copy (window position kept, old window closes, mutex released).
-- [ ] Mac: the update alert before the app's run loop, SMAppService unregister and register on a
-      version change, the administrator `ditto --noqtn` fallback, closing inherited sockets on
-      spawned processes (port 48100 free after a relaunch).
+- [ ] Mac: the administrator `ditto --noqtn` fallback, closing inherited sockets on spawned
+      processes (port 48100 free after a relaunch).

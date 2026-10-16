@@ -90,7 +90,9 @@ cat > "$APP/Contents/Info.plist" <<EOF
 </plist>
 EOF
 
-# The login agent, registered by the app itself the first time it's opened (SMAppService).
+# The login agent as versions before 3 registered it (SMAppService). Not used any more, but the
+# app needs it in the bundle to switch that registration off; its own agent is now a plist in
+# ~/Library/LaunchAgents that names the program by its path (com.usbc-display.agent).
 cat > "$APP/Contents/Library/LaunchAgents/com.usbc-display.sender.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

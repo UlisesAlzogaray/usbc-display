@@ -54,6 +54,8 @@
 
   const NEVER_DATA = 'No data leaves your two computers.';
   const FIREWALL_ASK = ['Accept incoming network connections?', 'Click <b>Allow</b>. It only listens on the cable.'];
+  // Only on accounts that can't add apps to Applications by themselves.
+  const MOVE_ASK = ['USB-C Display wants to make changes', 'Type your Mac’s <b>password</b> and click <b>OK</b>. It needs it once, to put itself in Applications.'];
 
   const hostOf = (u) => String(u || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
   const mb = (n) => (n / 1048576).toFixed(n > 10485760 ? 0 : 1);
@@ -334,15 +336,15 @@
     render(s, L) {
       const d = s.server.download;
       const nz = s.server.appNotarized;
-      const outdated = s.mac.outdated;
       const host = hostOf(s.server.url) || 'usbc.local';
-      const scene = D.scenes.download(host, nz, { size: d.size ? mb(d.size) + ' MB' : '8 MB', outdated });
+      // An older copy in Applications is replaced by itself now: no Update dialog to show.
+      const scene = D.scenes.download(host, nz, { size: d.size ? mb(d.size) + ' MB' : '8 MB' });
       if (!d.done) scene.poster = d.sent ? (nz ? 0.24 : 0.08) : (nz ? 0.1 : 0.05);
       const v = { lane: 'mac', scene, aside: WHY_GATE(nz) };
       const prog = d.size ? '<div class="progress-row"><div class="pl"><span>' + (d.done ? 'Your Mac has the app' : 'Sending the app to your Mac…') + '</span><span>' + mb(d.sent) + ' of ' + mb(d.size) + ' MB</span></div><div class="progress"><i style="width:' + Math.min(100, (100 * d.sent) / d.size).toFixed(1) + '%"></i></div></div>' : '';
       // In preview (?since=) the hold flag stands in for time already spent.
       const waited = Math.max(mark(L, 'done', d.done), d.done && L.hold ? L.since : 0);
-      const asks = [FIREWALL_ASK, ['A note: Background Items Added', 'That’s USB-C Display getting ready to start by itself. Nothing to click.']];
+      const asks = [FIREWALL_ASK, MOVE_ASK, ['A note: Background Items Added', 'That’s USB-C Display getting ready to start by itself. Nothing to click.']];
       if (!d.sent && !d.done) {
         v.title = 'Click Download on your Mac';
         v.lead = 'On the page that opened in Safari, click the blue <b>Download</b> button. If Safari asks to allow downloads, click <b>Allow</b>.';
@@ -354,26 +356,24 @@
         v.status = h.status('Downloading…');
       } else if (nz) {
         v.title = 'Open the app on your Mac';
-        v.lead = 'In Safari, click the <b>download arrow</b> at the top right, then double-click <b>USB-C Display</b>. When your Mac asks if you’re sure, click <b>Open</b>.' +
-          (outdated ? ' Then click <b>Update</b>.' : '');
+        v.lead = 'In Safari, click the <b>download arrow</b> at the top right, then double-click <b>USB-C Display</b>. When your Mac asks if you’re sure, click <b>Open</b>. ' +
+          'It then moves itself to Applications.';
         v.stage = 'short';
-        v.below = outdated && waited > 30
-          ? h.info('info', '<b>Clicked Not Now?</b> Double-click USB-C Display in Downloads again, then click <b>Update</b>.')
-          : h.ifAsks(asks);
+        v.below = h.ifAsks(asks);
         v.status = h.status('Waiting for the app to open on your Mac…');
       } else {
         v.title = 'Open the app on your Mac';
-        v.lead = 'Your Mac will say it can’t check this app for malware. That’s only because it isn’t registered with Apple. Follow these steps.';
+        v.lead = 'Your Mac will say it can’t check this app for malware. That’s only because it isn’t registered with Apple. Follow these steps. The app then moves itself to Applications.';
         v.sub = h.subs([
           ['Open the app', 'Click the <b>download arrow</b> at the top right of Safari, then double-click <b>USB-C Display</b>.'],
           ['Done', 'Your Mac says it can’t check the app. Click <b>Done</b>, not Move to Trash.'],
           ['Privacy &amp; Security', 'Click the gray gear in the Dock (<b>System Settings</b>), then <b>Privacy &amp; Security</b>. Scroll to the bottom.'],
           ['Open Anyway', 'Click <b>Open Anyway</b>. In the box that comes back, click <b>Open Anyway</b> again.'],
-          ['Password', 'Type your Mac’s <b>password</b> and click <b>OK</b>.' + (outdated ? ' Then click <b>Update</b>.' : '')],
+          ['Password', 'Type your Mac’s <b>password</b> and click <b>OK</b>.'],
         ]);
         v.aside += waited > 60
           ? h.card('Don’t see Open Anyway?', 'info', '<p>It only shows for about an hour. Double-click the app again, click <b>Done</b>, then look again.</p>')
-          : h.ifAsks(asks.slice(0, 1));
+          : h.ifAsks(asks.slice(0, 2));
         v.status = h.status('Waiting for the app to open on your Mac…');
       }
       return v;
@@ -391,12 +391,10 @@
       const v = {
         lane: 'pc', scene: D.scenes.move(),
         title: 'Move the app to Applications',
-        lead: 'The app is running from your Downloads folder. Click <b>Move it for me</b> below and it moves itself to Applications.',
+        // The app moves itself when it's opened; this step only shows when that didn't work.
+        lead: 'The app couldn’t move itself to Applications, so it’s running from your Downloads folder. Click <b>Move it for me</b> to try again.',
         stage: 'short',
-        below: h.ifAsks([
-          ['Access files in your Downloads folder?', 'Click <b>Allow</b>. It only needs this to move itself.'],
-          FIREWALL_ASK,
-        ]),
+        below: h.ifAsks([MOVE_ASK, FIREWALL_ASK]),
         aside: h.why({
           allows: 'USB-C Display moves itself into your Applications folder and opens again from there.',
           why: 'Apps in Downloads can’t start by themselves when you plug in the cable.',
@@ -408,7 +406,7 @@
       if (moving || (t && !failed)) {
         v.lane = 'mac';
         v.title = 'Moving the app on your Mac';
-        v.lead = 'Look at your Mac. If it asks to use your <b>Downloads folder</b>, click <b>Allow</b>. If it asks for your password, type it. The app then opens again by itself.';
+        v.lead = 'Look at your Mac. If it asks for your password, type it. The app then opens again by itself.';
         v.status = h.status('Moving it…');
         v.primary = null;
       } else if (failed) {

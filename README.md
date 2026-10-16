@@ -134,13 +134,23 @@ Switching size makes the Mac replace the display, so windows that were on it mov
 to the Mac's screen.
 
 - **Mac, the app:** `mac/build.sh` also makes `mac/dist/USB-C Display.app` (and
-  `USB-C-Display.zip`, which the laptop's setup serves to the Mac over the cable). Opened from
-  Applications, it registers itself to run at login (*Login Items*), asks for nothing until
-  the laptop's setup or screen needs it, and logs to `~/Library/Logs/USB-C Display.log`. Use
-  either the app or `install-agent.sh` below, not both: they are the same login agent, and
-  each needs its own permissions. A newer zip opened outside Applications offers to update
-  the copy there. Build with `DEVELOPER_ID` and `NOTARY_PROFILE` (see `build.sh`) for other
-  people: macOS blocks an app that isn't notarized until someone clicks *Open Anyway*.
+  `USB-C-Display.zip`, which the laptop's setup serves to the Mac over the cable). Opened
+  anywhere else (Downloads), it copies itself to Applications and starts from there; that
+  also updates an older copy. From Applications it clears the download flag on itself, sets
+  itself up to run at login (`~/Library/LaunchAgents/com.usbc-display.agent.plist`, listed under
+  *Login Items* with the app's name) and quits only once that agent is running; otherwise it
+  answers the laptop itself. It asks for nothing until the laptop's setup or screen needs it,
+  and logs to `~/Library/Logs/USB-C Display.log`. Use either the app or `install-agent.sh`
+  below, not both: each needs its own permissions. Build with `DEVELOPER_ID` and
+  `NOTARY_PROFILE` (see `build.sh`) for other people: macOS blocks an app that isn't notarized
+  until someone clicks *Open Anyway*.
+  - Why a plist of its own: versions before 3 registered the agent with `SMAppService`, where
+    launchd finds the program through the app's registration. Replacing the app (an update)
+    or deleting it and putting it back broke that lookup for good (`copy_bundle_path … Invalid
+    or missing Program`), and an agent registered from a copy still flagged as downloaded
+    never started either. Version 3 switches that registration off.
+  - To remove it by hand: `launchctl bootout gui/$(id -u)/com.usbc-display.agent`, delete the
+    plist above, then drag the app to the Trash.
 - **Mac:** `bash mac/install-agent.sh` runs the sender at every login as a background
   agent. It stays idle until the laptop asks for the screen. The first time, allow
   `usbc-display` under *System Settings > Privacy & Security > Screen Recording*. It
